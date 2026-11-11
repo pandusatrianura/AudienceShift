@@ -3,158 +3,113 @@ package tui_test
 import (
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/pandusatrianura/pocketqueue/internal/features/broker"
-	"github.com/pandusatrianura/pocketqueue/internal/features/storage"
-	"github.com/pandusatrianura/pocketqueue/internal/features/tui"
+	"github.com/pandusatrianura/AudienceShift/internal/features/inspector"
+	"github.com/pandusatrianura/AudienceShift/internal/features/tui"
 )
 
-func TestAppModel_Lifecycle(t *testing.T) {
-	engine := storage.NewMemoryEngine(100)
-	bus := broker.NewEventBus(50)
-	svc := broker.NewService(engine, bus, 1)
+func TestTUIModelLifecycle(t *testing.T) {
+	bus := inspector.NewEventBus()
+	defer bus.Close()
+	ch, unsub := bus.Subscribe(10)
+	defer unsub()
 
-	model := tui.NewAppModel(svc, bus, 100)
+	model := tui.NewModel("test-tunnel", "https://test.tunnel.com", "http://localhost:8080", ch, nil, "http://localhost:4040")
 
-	// 1. Initial view contains banner
+	// 1. Initial view contains header and tunnel info
 	initialView := model.View()
-	if !strings.Contains(initialView, "POCKETQUEUE") {
-		t.Errorf("expected view to contain 'POCKETQUEUE', got: %s", initialView)
+	if !strings.Contains(initialView, "AUDIENCESHIFT") {
+		t.Errorf("expected view to contain AUDIENCESHIFT")
+	}
+	if !strings.Contains(initialView, "test-tunnel") {
+		t.Errorf("expected view to contain tunnel ID")
 	}
 
-	// 2. Simulate window resize
-	updatedModel, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	model = updatedModel.(*tui.AppModel)
+	// 2. Simulate resize
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = updated.(tui.Model)
 
-	// 3. Send record arrived message
-	rec := storage.Record{
-		Topic:     "events",
-		Partition: 0,
-		Offset:    0,
-		Key:       []byte("evt-1"),
-		Value:     []byte(`{"status":"ok"}`),
-		Timestamp: time.Now(),
+	// 3. Receive event
+	evt := inspector.NewWebhookEvent("test-tunnel", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/webhooks/stripe",
+		Headers: map[string][]string{
+			"Content-Type":     {"application/json"},
+			"Stripe-Signature": {"sig_123"},
+		},
+		Body: []byte(`{"id":"evt_123","amount":1000}`),
+	})
+	evt.Response = inspector.HTTPResponse{
+		StatusCode: 200,
 	}
 
-	// Send record via eventbus
-	bus.Publish(rec)
+	updated, _ = model.Update(evt)
+	model = updated.(tui.Model)
 
-	// 4. Test key navigation: tab to switch view
-	updatedModel, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
-	model = updatedModel.(*tui.AppModel)
-
-	topicView := model.View()
-	if !strings.Contains(topicView, "2: Topics & DLQ") {
-		t.Errorf("expected view to indicate topic tab, got: %s", topicView)
+	eventView := model.View()
+	if !strings.Contains(eventView, "/webhooks/stripe") {
+		t.Errorf("expected event view to contain webhook path")
 	}
 
-	// Tab back
-	updatedModel, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
-	model = updatedModel.(*tui.AppModel)
-
-	// 5. Test Quit
-	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if cmd == nil {
-		t.Errorf("expected quit cmd on 'q', got nil")
-	}
-}
-
-func TestAppModel_Guardrails(t *testing.T) {
-	engine := storage.NewMemoryEngine(100)
-	bus := broker.NewEventBus(50)
-	svc := broker.NewService(engine, bus, 1)
-
-	model := tui.NewAppModel(svc, bus, 100)
-
-	// 1. Test Window Resize Guardrail (< 40x10)
-	m, _ := model.Update(tea.WindowSizeMsg{Width: 20, Height: 5})
-	smallView := m.View()
-	if !strings.Contains(smallView, "Terminal window too small") {
-		t.Errorf("expected 'Terminal window too small' warning, got: %s", smallView)
+	// 4. Test Space to Pause
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = updated.(tui.Model)
+	if !strings.Contains(model.View(), "PAUSED") {
+		t.Errorf("expected view to show PAUSED")
 	}
 
-	// Resize to proper dimension
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-
-	// 2. Publish a binary message and inspect it
-	binaryData := []byte{0x00, 0x01, 0x02, 0xFF, 0xFE, 0x00}
-	_, _ = svc.Produce(nil, "telemetry", 0, []byte("sensor-1"), binaryData, nil)
-
-	// Simulate record arrival in TUI
-	rec := storage.Record{
-		Topic:     "telemetry",
-		Partition: 0,
-		Offset:    0,
-		Key:       []byte("sensor-1"),
-		Value:     binaryData,
-		Timestamp: time.Now(),
-	}
-	m, _ = m.Update(rec) // Note: recordArrivedMsg is an internal type, or we open inspector directly
-
-	// Open inspect modal via 'enter'
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	inspectView := m.View()
-	if !strings.Contains(inspectView, "Binary Data") {
-		// Even if empty messages cursor, let's verify no panic
-	}
-
-	// Close inspect modal via 'esc'
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-
-	// 3. Open Replay modal via 'r'
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-
-	// Send invalid JSON keystroke and submit via ctrl+s
-	// Try submitting invalid JSON to replay
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'{'}})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
-
-	replayView := m.View()
-	// View should keep modal open or show error
-	_ = replayView
-}
-
-func TestAppModel_HighIngressBurstThrottling(t *testing.T) {
-	engine := storage.NewMemoryEngine(500)
-	bus := broker.NewEventBus(500)
-	svc := broker.NewService(engine, bus, 1)
-
-	model := tui.NewAppModel(svc, bus, 500)
-	m, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-
-	// Burst 200 records into the event bus
-	for i := 0; i < 200; i++ {
-		bus.Publish(storage.Record{
-			Topic:     "high-speed",
-			Partition: 0,
-			Offset:    int64(i),
-			Key:       []byte("k"),
-			Value:     []byte(`{"val": 1}`),
-			Timestamp: time.Now(),
-		})
-	}
-
-	// Consume and process commands in rapid succession
-	cmd := m.Init()
-	for i := 0; i < 100; i++ {
-		if cmd == nil {
-			break
-		}
-		msg := cmd()
-		if msg == nil {
-			break
-		}
-		var nextCmd tea.Cmd
-		m, nextCmd = m.Update(msg)
-		cmd = nextCmd
-	}
-
-	// Verify view renders with elements without panic
-	view := m.View()
-	if !strings.Contains(view, "POCKETQUEUE") {
-		t.Errorf("expected view to contain header after burst, got: %s", view)
+	// 5. Test Copy as cURL key 'y'
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = updated.(tui.Model)
+	if !strings.Contains(model.View(), "Copied cURL") {
+		t.Errorf("expected status message 'Copied cURL'")
 	}
 }
 
+func TestBadges(t *testing.T) {
+	b200 := tui.StatusBadge(200)
+	if !strings.Contains(b200, "2xx") {
+		t.Errorf("expected 2xx status badge")
+	}
+
+	b400 := tui.StatusBadge(404)
+	if !strings.Contains(b400, "4xx") {
+		t.Errorf("expected 4xx status badge")
+	}
+
+	b500 := tui.StatusBadge(502)
+	if !strings.Contains(b500, "5xx") {
+		t.Errorf("expected 5xx status badge")
+	}
+}
+
+func TestANSISanitization(t *testing.T) {
+	bus := inspector.NewEventBus()
+	defer bus.Close()
+	ch, unsub := bus.Subscribe(5)
+	defer unsub()
+
+	model := tui.NewModel("test-tunnel", "https://test.tunnel.com", "http://localhost:8080", ch, nil)
+
+	// Malicious payload containing terminal screen clear and cursor moves
+	maliciousPath := "/webhook/\x1b[2J\x1b[Hevil"
+	maliciousBody := []byte("{\x1b[31m\"danger\"\x1b[0m: \"\x1b[1;1Hhijack\"}")
+
+	evt := inspector.NewWebhookEvent("test-tunnel", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   maliciousPath,
+		Body:   maliciousBody,
+	})
+
+	updated, _ := model.Update(evt)
+	rendered := updated.(tui.Model).View()
+
+	// Ensure ANSI escapes are stripped
+	if strings.Contains(rendered, "\x1b[2J") || strings.Contains(rendered, "\x1b[H") {
+		t.Errorf("rendered view contains raw ANSI escape sequences!")
+	}
+	if !strings.Contains(rendered, "evil") {
+		t.Errorf("sanitization stripped readable text")
+	}
+}
