@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AudienceShift — Webhook Studio</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span>AudienceShift</span>
+      <span class="brand-badge">Studio</span>
+    </div>
+    <div class="tunnel-info">
+      <div>Tunnel: <span id="tunnel-url" class="tunnel-url">Loading...</span></div>
+      <div>Local: <span id="local-target" style="color: var(--color-success)">Loading...</span></div>
+    </div>
+  </header>
+
+  <div class="main-container">
+    <div class="sidebar">
+      <div class="sidebar-toolbar">
+        <input type="text" id="search-input" class="search-input" placeholder="Filter webhooks..." />
+        <button class="btn btn-secondary" onclick="clearEvents()" title="Clear history">Clear</button>
+      </div>
+      <ul id="event-list" class="event-list"></ul>
+    </div>
+
+    <div class="detail-view">
+      <div id="detail-header" style="padding: 12px 20px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center;">
+          <span id="detail-method" class="pill pill-method" style="margin-right: 8px;">GET</span>
+          <span id="detail-path" style="font-family: var(--font-mono); font-weight: 600;">/</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <div id="detail-meta" style="font-size: 0.8rem; color: var(--text-muted); margin-right: 12px;">Select an event</div>
+          <button id="btn-copy-curl" class="btn btn-secondary" onclick="copyAsCurl()" style="padding: 4px 10px; font-size: 0.78rem;">📋 Copy cURL</button>
+          <button id="btn-quick-replay" class="btn" onclick="submitReplay(false)" style="padding: 4px 10px; font-size: 0.78rem;">⚡ Replay</button>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <div class="tab active" data-tab="payload">Payload</div>
+        <div class="tab" data-tab="headers">Headers</div>
+        <div class="tab" data-tab="response">Response</div>
+        <div class="tab" data-tab="mutate">Replay & Mutate</div>
+        <div class="tab" data-tab="catalog">Preset Catalog</div>
+      </div>
+
+      <div id="tab-content" class="tab-content">
+        <div style="padding: 40px; text-align: center; color: var(--text-muted);">
+          Select a webhook from the left sidebar to inspect payload and headers.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
+

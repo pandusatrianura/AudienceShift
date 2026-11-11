@@ -1,0 +1,33 @@
+# Binaries & compiled artifacts
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Runtime logs & local storage
+*.log
+*.wal
+data/
+tmp*/
+e2e_demo/
+
+# Test & coverage artifacts
+*.test
+*.out
+coverage.html
+
+# Vendor dependencies
+vendor/
+
+# Artifacts & planning docs
+artifacts/superpowers/
+
+# Workflows
+.github/workflows/
+
+# Ignore all hidden files and directories (prefix with .)
+.*
+!.gitignore

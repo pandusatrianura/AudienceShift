@@ -1,0 +1,27 @@
+services:
+  audienceshift-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: audienceshift:latest
+    container_name: audienceshift-server
+    restart: unless-stopped
+    ports:
+      - "80:80"       # ACME HTTP-01 challenge & HTTP->HTTPS redirect
+      - "443:443"     # Secure HTTPS & WSS tunnel endpoint
+      - "8080:8080"   # Alternative HTTP ingress port
+    volumes:
+      - certs-data:/certs
+    command: >
+      server
+      --addr :443
+      --domain ${DOMAIN:-tunnel.example.com}
+      --token ${TUNNEL_TOKEN:-}
+      --acme
+      --acme-email ${ACME_EMAIL:-admin@example.com}
+      --acme-cache /certs
+
+volumes:
+  certs-data:
+    driver: local
+
