@@ -362,3 +362,62 @@ func TestMockReceiverLifecycle(t *testing.T) {
 		t.Fatal("timed out waiting for replayed event on backend")
 	}
 }
+
+func TestE2EComplianceAndExport(t *testing.T) {
+	// 1. Backend with signature check
+	secretKey := "whsec_test_secret_for_compliance_suite_12345"
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sig := r.Header.Get("Stripe-Signature")
+		if sig == "" {
+			http.Error(w, "missing signature", http.StatusUnauthorized)
+			return
+		}
+		if !strings.Contains(sig, "v1=") {
+			http.Error(w, "invalid signature format", http.StatusBadRequest)
+			return
+		}
+		// If forged signature
+		if strings.Contains(sig, "forged") {
+			http.Error(w, "invalid signature", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"verified"}`))
+	}))
+	defer backend.Close()
+
+	// 2. Test Store & Export
+	store := inspector.NewMemoryStore(50)
+	evt := inspector.NewWebhookEvent("test-tunnel", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/webhooks/stripe",
+		Body:   []byte(`{"id":"evt_123"}`),
+	})
+	_ = store.Save(evt)
+
+	events, _ := store.List(10)
+	jsonExport, err := inspector.ExportJSON(events, false)
+	if err != nil {
+		t.Fatalf("ExportJSON failed: %v", err)
+	}
+	if !strings.Contains(string(jsonExport), evt.ID) {
+		t.Errorf("expected json export to contain event id %s", evt.ID)
+	}
+
+	postmanExport, err := inspector.ExportPostman(events, "E2E Test")
+	if err != nil {
+		t.Fatalf("ExportPostman failed: %v", err)
+	}
+	if !strings.Contains(string(postmanExport), "https://schema.getpostman.com/json/collection/v2.1.0/collection.json") {
+		t.Errorf("expected postman schema in export")
+	}
+
+	// 3. Test Signature verification helpers
+	body := []byte(`{"id":"evt_123"}`)
+	validSig := inspector.GenerateStripeSignature(body, secretKey, time.Now())
+	if !strings.Contains(validSig, "t=") || !strings.Contains(validSig, "v1=") {
+		t.Errorf("generated signature does not conform to Stripe format")
+	}
+}

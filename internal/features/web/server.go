@@ -55,9 +55,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/events", s.handleEvents)
 	s.mux.HandleFunc("/api/events/stream", s.handleStream)
 	s.mux.HandleFunc("/api/events/clear", s.handleClear)
+	s.mux.HandleFunc("/api/events/export", s.handleExport)
 	s.mux.HandleFunc("/api/replay", s.handleReplay)
 	s.mux.HandleFunc("/api/catalog", s.handleCatalog)
 	s.mux.HandleFunc("/api/catalog/trigger", s.handleCatalogTrigger)
+	s.mux.HandleFunc("/api/composer/dispatch", s.handleComposerDispatch)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -310,6 +312,115 @@ func (s *Server) handleCatalogTrigger(w http.ResponseWriter, r *http.Request) {
 		Chaos: replay.ChaosOptions{
 			Duplicate: req.Duplicate,
 		},
+	}
+
+	replayed, err := s.opts.ReplaySvc.Replay(r.Context(), event, opts)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(replayed)
+}
+
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Store == nil {
+		http.Error(w, "Store not configured", http.StatusInternalServerError)
+		return
+	}
+	events, err := s.opts.Store.List(1000)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	format := strings.ToLower(r.URL.Query().Get("format"))
+	includeSecrets := r.URL.Query().Get("include_secrets") == "true"
+
+	if format == "postman" {
+		data, err := inspector.ExportPostman(events, fmt.Sprintf("AudienceShift Webhooks (%s)", s.opts.TunnelID))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=audienceshift-postman-%s.json", time.Now().Format("20060102-150405")))
+		_, _ = w.Write(data)
+		return
+	}
+
+	// Default: JSON export
+	data, err := inspector.ExportJSON(events, includeSecrets)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=audienceshift-session-%s.json", time.Now().Format("20060102-150405")))
+	_, _ = w.Write(data)
+}
+
+type composerPayload struct {
+	Method        string            `json:"method"`
+	Path          string            `json:"path"`
+	Headers       map[string]string `json:"headers"`
+	Body          string            `json:"body"`
+	Provider      string            `json:"provider"`
+	SigningSecret string            `json:"signing_secret"`
+}
+
+func (s *Server) handleComposerDispatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req composerPayload
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Method == "" {
+		req.Method = "POST"
+	}
+	if req.Path == "" {
+		req.Path = "/webhook"
+	}
+	if !strings.HasPrefix(req.Path, "/") {
+		req.Path = "/" + req.Path
+	}
+
+	reqHeaders := make(map[string][]string)
+	for k, v := range req.Headers {
+		reqHeaders[k] = []string{v}
+	}
+	if _, ok := reqHeaders["Content-Type"]; !ok {
+		reqHeaders["Content-Type"] = []string{"application/json"}
+	}
+
+	bodyBytes := []byte(req.Body)
+
+	capturedReq := inspector.HTTPRequest{
+		Method:  strings.ToUpper(req.Method),
+		Path:    req.Path,
+		Headers: reqHeaders,
+		Body:    bodyBytes,
+	}
+
+	event := inspector.NewWebhookEvent(s.opts.TunnelID, capturedReq)
+	if req.Provider != "" {
+		event.Provider = strings.ToLower(req.Provider)
+	}
+
+	if s.opts.ReplaySvc == nil {
+		http.Error(w, "Replay service not configured", http.StatusInternalServerError)
+		return
+	}
+
+	opts := replay.MutationOptions{
+		SigningSecret: req.SigningSecret,
 	}
 
 	replayed, err := s.opts.ReplaySvc.Replay(r.Context(), event, opts)

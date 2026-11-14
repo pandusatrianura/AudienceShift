@@ -196,10 +196,102 @@ function renderActiveTab() {
           <button class="btn btn-secondary" onclick="submitReplay(false)">Replay Original</button>
         </div>
         <div id="replay-feedback" style="font-family: var(--font-mono); font-size: 0.85rem; margin-top: 10px;"></div>
+        <div id="replay-diff-box" style="margin-top: 14px;"></div>
       </div>
     `;
+  } else if (currentTab === 'composer') {
+    renderComposerTab(content);
   } else if (currentTab === 'catalog') {
     renderCatalogTab(content);
+  }
+}
+
+function renderComposerTab(container) {
+  container.innerHTML = `
+    <div style="max-width: 800px;">
+      <h3 style="font-size: 1.1rem; margin-bottom: 4px;">Custom Webhook Composer (Scratchpad)</h3>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px;">
+        Craft and dispatch custom webhook payloads directly to your local endpoint with instant cryptographic HMAC signing.
+      </p>
+      <div style="display: grid; grid-template-columns: 120px 1fr; gap: 10px; margin-bottom: 12px;">
+        <div class="form-group" style="margin: 0;">
+          <label>Method</label>
+          <select id="composer-method" class="form-control" style="height: 38px;">
+            <option value="POST" selected>POST</option>
+            <option value="GET">GET</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin: 0;">
+          <label>Destination Path</label>
+          <input id="composer-path" class="form-control" type="text" value="/api/webhooks/test" />
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+        <div class="form-group" style="margin: 0;">
+          <label>Provider (for auto-signing format)</label>
+          <select id="composer-provider" class="form-control" style="height: 38px;">
+            <option value="generic" selected>Generic</option>
+            <option value="stripe">Stripe</option>
+            <option value="github">GitHub</option>
+            <option value="midtrans">Midtrans</option>
+            <option value="xendit">Xendit</option>
+            <option value="slack">Slack</option>
+            <option value="shopify">Shopify</option>
+            <option value="gitlab">GitLab</option>
+            <option value="discord">Discord</option>
+            <option value="twilio">Twilio</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin: 0;">
+          <label>Signing Secret (Optional HMAC key)</label>
+          <input id="composer-secret" class="form-control" type="text" placeholder="whsec_... or test secret" />
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom: 12px;">
+        <label>Payload (JSON or Raw Text)</label>
+        <textarea id="composer-body" class="form-control" style="height: 140px;">{\n  "event": "order.created",\n  "amount": 150000,\n  "customer": "dev@audienceshift.com"\n}</textarea>
+      </div>
+      <button class="btn" onclick="dispatchComposer()">🚀 Dispatch to Local Target</button>
+      <div id="composer-feedback" style="font-family: var(--font-mono); font-size: 0.85rem; margin-top: 12px;"></div>
+    </div>
+  `;
+}
+
+async function dispatchComposer() {
+  const feedback = document.getElementById('composer-feedback');
+  if (feedback) feedback.textContent = 'Dispatching custom webhook...';
+
+  const method = document.getElementById('composer-method').value;
+  const path = document.getElementById('composer-path').value;
+  const provider = document.getElementById('composer-provider').value;
+  const secret = document.getElementById('composer-secret').value;
+  const body = document.getElementById('composer-body').value;
+
+  try {
+    const res = await fetch('/api/composer/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: method,
+        path: path,
+        provider: provider,
+        signing_secret: secret,
+        body: body
+      })
+    });
+    const result = await res.json();
+    if (feedback) {
+      feedback.style.color = result.response.status_code >= 200 && result.response.status_code < 300 ? 'var(--color-success)' : 'var(--color-danger)';
+      feedback.textContent = `Dispatched custom webhook -> Local Status ${result.response.status_code} (${result.duration_ms}ms)`;
+    }
+  } catch (err) {
+    if (feedback) {
+      feedback.style.color = 'var(--color-danger)';
+      feedback.textContent = 'Dispatch failed: ' + err.message;
+    }
   }
 }
 
@@ -298,12 +390,43 @@ async function submitReplay(mutate) {
       feedback.style.color = result.response.status_code >= 200 && result.response.status_code < 300 ? 'var(--color-success)' : 'var(--color-danger)';
       feedback.textContent = `Replayed -> Local Status ${result.response.status_code} (${result.duration_ms}ms)`;
     }
+
+    const diffBox = document.getElementById('replay-diff-box');
+    if (diffBox && selectedEvent) {
+      let respBodyStr = '';
+      try {
+        respBodyStr = atob(result.response.body || '');
+      } catch {}
+
+      diffBox.innerHTML = `
+        <div style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px;">
+          <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 8px;">Replay Comparison (Diff)</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px;">
+            <div style="padding: 8px; background: var(--bg-secondary); border-radius: 4px;">
+              <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600;">ORIGINAL RESPONSE</div>
+              <div style="font-family: var(--font-mono); font-size: 0.85rem;">Status: <strong>${selectedEvent.response.status_code}</strong> (${selectedEvent.duration_ms}ms)</div>
+            </div>
+            <div style="padding: 8px; background: var(--bg-secondary); border-radius: 4px;">
+              <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600;">REPLAYED RESPONSE</div>
+              <div style="font-family: var(--font-mono); font-size: 0.85rem;">Status: <strong style="color: ${result.response.status_code >= 200 && result.response.status_code < 300 ? 'var(--color-success)' : 'var(--color-danger)'}">${result.response.status_code}</strong> (${result.duration_ms}ms)</div>
+            </div>
+          </div>
+          <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">REPLAYED BODY:</div>
+          <pre class="code-block" style="max-height: 120px; font-size: 0.78rem; overflow-y: auto;">${escapeHtml(respBodyStr || result.response.error || '(empty response body)')}</pre>
+        </div>
+      `;
+    }
   } catch (err) {
     if (feedback) {
       feedback.style.color = 'var(--color-danger)';
       feedback.textContent = 'Replay request failed: ' + err.message;
     }
   }
+}
+
+function exportSession(format) {
+  const includeSecrets = confirm("Include unmasked authorization headers in export?");
+  window.open(`/api/events/export?format=${format}&include_secrets=${includeSecrets}`, '_blank');
 }
 
 function copyAsCurl() {

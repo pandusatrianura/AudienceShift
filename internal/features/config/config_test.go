@@ -83,3 +83,37 @@ secrets:
 		t.Errorf("unexpected midtrans secret: %s", cfg.Secrets["midtrans"])
 	}
 }
+
+func TestConfigLoadCustomPresets(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, ".audienceshift.yaml")
+
+	content := `
+custom_presets:
+  - id: internal:order.created
+    provider: internal
+    name: "Internal Order"
+    description: "Fires when internal order is created"
+    path: /api/orders
+    body: '{"order_id":"123"}'
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("failed to load config file: %v", err)
+	}
+
+	if len(cfg.CustomPresets) != 1 {
+		t.Fatalf("expected 1 custom preset, got %d", len(cfg.CustomPresets))
+	}
+	p := cfg.CustomPresets[0]
+	if p.ID != "internal:order.created" {
+		t.Errorf("unexpected preset ID: %s", p.ID)
+	}
+	if p.Path != "/api/orders" {
+		t.Errorf("unexpected preset Path: %s", p.Path)
+	}
+}

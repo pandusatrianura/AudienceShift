@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pandusatrianura/AudienceShift/internal/features/config"
 	"github.com/pandusatrianura/AudienceShift/internal/features/inspector"
 )
 
@@ -312,27 +313,58 @@ var defaultPresets = []*Preset{
 
 // Catalog provides preset discovery and request creation.
 type Catalog struct {
-	presets map[string]*Preset
+	presets     map[string]*Preset
+	orderedList []*Preset
 }
 
 // NewCatalog initializes a new Preset Catalog with standard presets.
 func NewCatalog() *Catalog {
 	c := &Catalog{
-		presets: make(map[string]*Preset, len(defaultPresets)),
+		presets:     make(map[string]*Preset, len(defaultPresets)),
+		orderedList: make([]*Preset, 0, len(defaultPresets)),
 	}
 	for _, p := range defaultPresets {
 		c.presets[p.ID] = p
+		c.orderedList = append(c.orderedList, p)
 	}
 	return c
 }
 
+// Register adds or updates a preset in the catalog.
+func (c *Catalog) Register(p *Preset) {
+	if p == nil || p.ID == "" {
+		return
+	}
+	if _, exists := c.presets[p.ID]; !exists {
+		c.orderedList = append(c.orderedList, p)
+	}
+	c.presets[p.ID] = p
+}
+
+// RegisterCustomPresets imports custom presets from config.
+func (c *Catalog) RegisterCustomPresets(custom []config.CustomPresetConfig) {
+	for _, cp := range custom {
+		headers := make(map[string][]string)
+		for k, v := range cp.Headers {
+			headers[k] = []string{v}
+		}
+		if _, ok := headers["Content-Type"]; !ok {
+			headers["Content-Type"] = []string{"application/json"}
+		}
+		c.Register(&Preset{
+			ID:          cp.ID,
+			Provider:    cp.Provider,
+			Name:        cp.Name,
+			Description: cp.Description,
+			Headers:     headers,
+			Body:        cp.Body,
+		})
+	}
+}
+
 // List returns all registered webhook presets.
 func (c *Catalog) List() []*Preset {
-	result := make([]*Preset, 0, len(c.presets))
-	for _, p := range defaultPresets {
-		result = append(result, p)
-	}
-	return result
+	return c.orderedList
 }
 
 // Get finds a preset by its unique ID (e.g. "stripe:payment_intent.succeeded").

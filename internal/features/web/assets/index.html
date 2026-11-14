@@ -16,6 +16,10 @@
       <div>Tunnel: <span id="tunnel-url" class="tunnel-url">Loading...</span></div>
       <div>Local: <span id="local-target" style="color: var(--color-success)">Loading...</span></div>
     </div>
+    <div style="display: flex; gap: 8px;">
+      <button class="btn btn-secondary" onclick="exportSession('json')" style="padding: 4px 10px; font-size: 0.78rem;">📥 Export JSON</button>
+      <button class="btn btn-secondary" onclick="exportSession('postman')" style="padding: 4px 10px; font-size: 0.78rem;">📦 Export Postman</button>
+    </div>
   </header>
 
   <div class="main-container">
@@ -45,6 +49,7 @@
         <div class="tab" data-tab="headers">Headers</div>
         <div class="tab" data-tab="response">Response</div>
         <div class="tab" data-tab="mutate">Replay & Mutate</div>
+        <div class="tab" data-tab="composer">Composer</div>
         <div class="tab" data-tab="catalog">Preset Catalog</div>
       </div>
 
@@ -59,4 +64,3 @@
   <script src="/app.js"></script>
 </body>
 </html>
-

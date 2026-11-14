@@ -74,6 +74,25 @@ var (
 
 	HelpDescStyle = lipgloss.NewStyle().
 			Foreground(ColorMuted)
+
+	ActiveTabStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(ColorPrimary).
+			Padding(0, 1)
+
+	InactiveTabStyle = lipgloss.NewStyle().
+			Foreground(ColorMuted).
+			Background(lipgloss.Color("#1E293B")).
+			Padding(0, 1)
+
+	FilterPromptStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorWarn)
+
+	FilterTextStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FFFFFF"))
 )
 
 // ProviderBadge returns a styled badge for recognized webhook sources.

@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,44 @@ var (
 
 var subdomainRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$`)
 
+// TokenBucket provides a thread-safe token bucket rate limiter for inbound tunnel requests.
+type TokenBucket struct {
+	mu         sync.Mutex
+	tokens     float64
+	capacity   float64
+	rate       float64 // tokens per second
+	lastRefill time.Time
+}
+
+func NewTokenBucket(rate, capacity float64) *TokenBucket {
+	return &TokenBucket{
+		tokens:     capacity,
+		capacity:   capacity,
+		rate:       rate,
+		lastRefill: time.Now(),
+	}
+}
+
+func (tb *TokenBucket) Allow() bool {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(tb.lastRefill).Seconds()
+	tb.lastRefill = now
+
+	tb.tokens += elapsed * tb.rate
+	if tb.tokens > tb.capacity {
+		tb.tokens = tb.capacity
+	}
+
+	if tb.tokens >= 1.0 {
+		tb.tokens -= 1.0
+		return true
+	}
+	return false
+}
+
 // TunnelSession holds active connection state and ownership metadata.
 type TunnelSession struct {
 	ID          string
@@ -37,9 +76,13 @@ type TunnelSession struct {
 type Server struct {
 	BaseDomain string
 	AuthToken  string
+	StartTime  time.Time
+	RateLimit  float64 // default 60.0 req/sec
+	RateBurst  float64 // default 100.0
 
 	mu       sync.RWMutex
 	tunnels  map[string]*TunnelSession
+	limiters map[string]*TokenBucket
 	upgrader websocket.Upgrader
 }
 
@@ -48,7 +91,11 @@ func NewServer(baseDomain string, authToken string) *Server {
 	return &Server{
 		BaseDomain: baseDomain,
 		AuthToken:  authToken,
+		StartTime:  time.Now(),
+		RateLimit:  60.0,
+		RateBurst:  100.0,
 		tunnels:    make(map[string]*TunnelSession),
+		limiters:   make(map[string]*TokenBucket),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true
@@ -57,6 +104,23 @@ func NewServer(baseDomain string, authToken string) *Server {
 			WriteBufferSize: 32 * 1024,
 		},
 	}
+}
+
+// AllowRequest checks whether a tunnel subdomain is within its allowed rate limit.
+func (s *Server) AllowRequest(tunnelID string) bool {
+	if s.RateLimit <= 0 {
+		return true
+	}
+
+	s.mu.Lock()
+	limiter, exists := s.limiters[tunnelID]
+	if !exists {
+		limiter = NewTokenBucket(s.RateLimit, s.RateBurst)
+		s.limiters[tunnelID] = limiter
+	}
+	s.mu.Unlock()
+
+	return limiter.Allow()
 }
 
 // RegisterTunnel safely binds a tunnel ID to an active yamux session with ownership verification.
@@ -94,6 +158,7 @@ func (s *Server) UnregisterTunnel(id string, session *yamux.Session) {
 		if session == nil || existing.Session == session {
 			_ = existing.Session.Close()
 			delete(s.tunnels, id)
+			delete(s.limiters, id)
 		}
 	}
 }
@@ -120,6 +185,18 @@ func (s *Server) ActiveCount() int {
 		}
 	}
 	return count
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	uptime := time.Since(s.StartTime).Round(time.Second).String()
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":         "healthy",
+		"uptime":         uptime,
+		"active_tunnels": s.ActiveCount(),
+		"version":        "0.1.0",
+	})
 }
 
 // HandleConnect upgrades incoming client connections to WebSocket and initializes yamux server.
@@ -189,13 +266,22 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request) {
 
 // ServeHTTP handles both client connection upgrades and public inbound webhook traffic.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 1. Check if this is a tunnel client connecting
+	// 1. Healthcheck / Status endpoints (active on root domain, IP, or direct host without subdomain)
+	if r.URL.Path == "/healthz" || r.URL.Path == "/status" {
+		sub := ExtractSubdomain(r, s.BaseDomain)
+		if sub == "" || sub == "healthz" || sub == "status" {
+			s.handleHealthz(w, r)
+			return
+		}
+	}
+
+	// 2. Check if this is a tunnel client connecting
 	if r.URL.Path == ConnectPath {
 		s.HandleConnect(w, r)
 		return
 	}
 
-	// 2. Identify destination tunnel ID
+	// 3. Identify destination tunnel ID
 	tunnelID := ExtractSubdomain(r, s.BaseDomain)
 	if tunnelID == "" {
 		http.Error(w, "AudienceShift: Missing or invalid tunnel identifier", http.StatusBadRequest)
@@ -211,7 +297,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Guard against memory exhaustion from oversized payloads
 	r.Body = http.MaxBytesReader(w, r.Body, DefaultMaxBodySize)
 
-	// 3. Open multiplexed stream to connected client
+	// 4. Rate limiting guard per tunnel subdomain (anti-DDoS / anti-flood)
+	if !s.AllowRequest(tunnelID) {
+		w.Header().Set("Retry-After", "1")
+		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%.0f", s.RateLimit))
+		http.Error(w, "AudienceShift: Ingress rate limit exceeded (429 Too Many Requests)", http.StatusTooManyRequests)
+		return
+	}
+
+	// 5. Open multiplexed stream to connected client
 	stream, err := session.OpenStream()
 	if err != nil {
 		http.Error(w, "AudienceShift: Failed to open stream to local tunnel client", http.StatusBadGateway)

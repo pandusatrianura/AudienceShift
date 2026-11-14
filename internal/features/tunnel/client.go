@@ -235,7 +235,26 @@ func (c *Client) handleStream(ctx context.Context, stream *yamux.Stream) {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	// Guard against memory exhaustion from unbounded local backend response bodies
+	limitedRespReader := io.LimitReader(resp.Body, DefaultMaxBodySize+1)
+	respBody, _ := io.ReadAll(limitedRespReader)
+	if len(respBody) > DefaultMaxBodySize {
+		event.Response = inspector.HTTPResponse{
+			StatusCode: http.StatusBadGateway,
+			Error:      "Local backend response exceeded 10MB limit",
+		}
+		event.DurationMs = duration.Milliseconds()
+
+		if c.opts.Store != nil {
+			_ = c.opts.Store.Save(event)
+		}
+		if c.opts.Bus != nil {
+			c.opts.Bus.Publish(event)
+		}
+
+		c.writeErrorResponse(stream, http.StatusBadGateway, "Local backend response exceeded 10MB limit")
+		return
+	}
 
 	event.Response = inspector.HTTPResponse{
 		StatusCode: resp.StatusCode,

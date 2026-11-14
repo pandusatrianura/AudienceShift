@@ -53,14 +53,26 @@ flowchart LR
    Detects provider HMAC signatures and verification tokens across **Stripe** (with timestamp tolerance refresh), **Midtrans** (SHA-512 `signature_key`), **GitHub** (`X-Hub-Signature-256`), **Slack** (`v0=...`), **Shopify** (`X-Shopify-Hmac-Sha256`), **Xendit** (`X-Callback-Token`), **GitLab** (`X-Gitlab-Token`), **Discord** (`X-Signature-Ed25519`), and **Twilio** (`X-Twilio-Signature`). When mutating payloads, AudienceShift automatically recalculates valid cryptographic signatures using your test secret so your local verification middleware passes.
 5. **🔒 Built-in Privacy & Sensitive Data Masking:**  
    Automatic masking of `Authorization: Bearer ****`, `Cookie`, `X-Api-Key`, `X-Callback-Token`, and `X-Gitlab-Token` in both the Terminal TUI and Web Studio (with an interactive 1-click `[👁️ Reveal]` toggle for safe screen sharing and live streaming).
-6. **📋 Developer Ergonomics:**  
+6. **📋 Developer Ergonomics & Full Observability:**  
+   - **Terminal TUI Tab Toggle (`Tab`):** Instantly switch between `[Request]` and `[Response]` to inspect local backend status codes, latency, response headers, and JSON error bodies directly from your terminal.
+   - **Vertical Payload Scrolling (`PgUp` / `PgDn`):** Smoothly scroll through massive payloads and multi-line traces.
+   - **Interactive Live Filter (`/`):** Filter incoming webhooks on the fly by provider, HTTP method, or path.
    - **1-Key "Copy as cURL":** Press `y` in the TUI to export the selected webhook directly to your system clipboard via ANSI OSC 52, or click the `📋 Copy as cURL` button in Web Studio.
    - **Config Auto-Discovery:** Reads `.audienceshift.yaml` automatically so you can just type `audienceshift listen` with zero repetitive flags.
 7. **🪟 Dual-Mode Studio (Terminal TUI + Embedded Web UI):**  
-   - **Terminal TUI (Default):** Interactive split-pane terminal UI built with Bubbletea. Fast, responsive, keyboard-driven navigation (`↑`/`↓`, `Space` pause stream, `r` replay, `y` copy cURL, `c` clear, `q` quit).
-   - **Web Studio (`--web` flag):** Zero-npm, embedded single-page dashboard at `http://localhost:4040` (with automatic port collision fallback `:4040` $\rightarrow$ `:4041`..`:4060`) featuring JSON tree viewer, SSE live stream, copyable curl commands, and point-and-click replay.
-8. **🎲 Universal Webhook Preset Catalog & Chaos Simulator:**  
-   Send realistic simulated webhook payloads from 9+ major platforms without needing live third-party developer accounts, plus the `--duplicate` flag to stress-test your backend's idempotency.
+   - **Terminal TUI (Default):** Interactive split-pane terminal UI built with Bubbletea. Fast, responsive, keyboard-driven navigation (`Tab` toggle, `↑`/`↓`, `PgUp`/`PgDn`, `/` filter, `Space` pause, `r` replay, `y` copy cURL, `q` quit).
+   - **Web Studio (`--web` flag):** Zero-npm, embedded dashboard at `http://localhost:4040` (auto port fallback `:4040` $\rightarrow$ `:4041`..`:4060`) featuring:
+     - **Custom Webhook Composer:** Scratchpad to build, sign, and dispatch custom webhooks from scratch.
+     - **Session Export:** Download captured webhooks in 1 click as JSON or Postman Collection v2.1 (or via CLI `--export events.json`).
+     - **Response Diffing:** Visual side-by-side comparison between original and replayed responses.
+8. **🛡️ Production Hardening & Ingress Protection:**  
+   - **Healthcheck Endpoint (`GET /healthz`):** Built-in Docker/Kubernetes readiness and uptime monitor probe.
+   - **Anti-DDoS Ingress Rate Limiting:** Token-bucket rate limiter per tunnel subdomain protecting local developer machines from flood attacks.
+   - **Memory Guard:** Strict 10MB payload and response size limits preventing Out-Of-Memory (OOM) poison pills.
+9. **🧪 Automated CI/CD Compliance Runner (`verify` Command):**  
+   Run `audienceshift verify` in GitHub Actions or locally to audit whether your webhook handlers properly enforce cryptographic signature validation, reject forged headers, block expired replay timestamps, and handle duplicate deliveries idempotently.
+10. **🎲 Universal Webhook Preset Catalog & Chaos Simulator:**  
+    Send realistic simulated webhook payloads from 9+ major platforms without live third-party developer accounts, plus custom user-defined presets via `.audienceshift.yaml` and the `--duplicate` flag to stress-test idempotency.
 
 ---
 
@@ -128,6 +140,18 @@ audienceshift trigger github:push 8080 --secret gh_test_secret
 audienceshift trigger midtrans:settlement 8080 --duplicate
 ```
 
+### 6. Automated Webhook Compliance & Security Test Suite (`verify` Runner)
+
+Run automated security and compliance audits against your local webhook handler or in CI/CD before merging PRs:
+
+```bash
+# Verify Stripe webhook handler compliance (valid HMAC, tampered rejection, anti-replay, idempotency)
+audienceshift verify http://localhost:8080/webhooks/stripe --provider stripe --secret whsec_test
+
+# Output machine-readable JSON for GitHub Actions / CI/CD pipeline automation
+audienceshift verify http://localhost:3000/api/github --provider github --secret gh_secret --json
+```
+
 ---
 
 ## ⚙️ Configuration File (`.audienceshift.yaml`)
@@ -158,6 +182,15 @@ secrets:
   slack: my-slack-signing-secret
   xendit: xnd_test_token
   gitlab: gl_test_token
+
+# 6. Custom Company Presets
+custom_presets:
+  - id: internal:order.created
+    provider: internal
+    name: "Internal Order Created"
+    description: "Company order lifecycle webhook"
+    path: /api/webhooks/orders
+    body: '{"order_id": "ORD-9999", "status": "PAID"}'
 ```
 
 Now simply run:

@@ -22,6 +22,8 @@ func main() {
 		runMock(os.Args[2:])
 	case "trigger":
 		runTrigger(os.Args[2:])
+	case "verify":
+		runVerify(os.Args[2:])
 	case "version", "-v", "--version":
 		printVersion()
 	case "help", "-h", "--help":
@@ -44,6 +46,7 @@ Commands:
   listen    Connect local service to tunnel and launch Webhook Studio
   mock      Start offline standalone webhook receiver (no tunnel/VPS required)
   trigger   Send simulated webhook from preset catalog to localhost
+  verify    Run automated webhook compliance & signature security test suite
   version   Show version and build information
   help      Show this help message
 
@@ -54,7 +57,11 @@ Server Examples:
 Client Examples:
   audienceshift listen 3000 --server wss://tunnel.example.com/tunnel/connect
   audienceshift listen 8000 --server ws://localhost:8080/tunnel/connect --web
-  audienceshift listen http://localhost:8080/webhooks --headless
+  audienceshift listen http://localhost:8080/webhooks --headless --export session.json
+
+Verification Suite Examples:
+  audienceshift verify http://localhost:8080/webhooks/stripe --provider stripe --secret whsec_test
+  audienceshift verify http://localhost:3000/api/github --provider github --secret my_github_secret --json
 
 Offline Mock Examples:
   audienceshift mock 3000

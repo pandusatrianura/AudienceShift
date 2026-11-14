@@ -153,3 +153,85 @@ func TestWebServerPortFallback(t *testing.T) {
 		t.Fatalf("expected 200 OK from /api/status, got %d", resp.StatusCode)
 	}
 }
+
+func TestWebServerExportAndComposer(t *testing.T) {
+	localApp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"received":true}`))
+	}))
+	defer localApp.Close()
+
+	store := inspector.NewMemoryStore(10)
+	bus := inspector.NewEventBus()
+	defer bus.Close()
+	replaySvc := replay.NewService(store, bus, localApp.URL)
+
+	evt := inspector.NewWebhookEvent("test-export", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/webhooks/test",
+		Body:   []byte(`{"test":true}`),
+	})
+	_ = store.Save(evt)
+
+	webServer := web.NewServer(web.ServerOptions{
+		TunnelID:    "test-export",
+		PublicURL:   "https://test-export.tunnel.com",
+		LocalTarget: localApp.URL,
+		Store:       store,
+		Bus:         bus,
+		ReplaySvc:   replaySvc,
+	})
+
+	ts := httptest.NewServer(webServer)
+	defer ts.Close()
+
+	// 1. Test JSON Export
+	resp, err := http.Get(ts.URL + "/api/events/export?format=json")
+	if err != nil {
+		t.Fatalf("failed to export json: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for JSON export, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "/webhooks/test") {
+		t.Fatalf("expected exported json to contain webhook path")
+	}
+
+	// 2. Test Postman Export
+	resp, err = http.Get(ts.URL + "/api/events/export?format=postman")
+	if err != nil {
+		t.Fatalf("failed to export postman: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for Postman export, got %d", resp.StatusCode)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "https://schema.getpostman.com/json/collection/v2.1.0/collection.json") {
+		t.Fatalf("expected valid Postman collection schema")
+	}
+
+	// 3. Test Composer Dispatch
+	composerPayload := map[string]interface{}{
+		"method": "POST",
+		"path":   "/api/custom-test",
+		"body":   `{"composer":true}`,
+	}
+	jsonBytes, _ := json.Marshal(composerPayload)
+	resp, err = http.Post(ts.URL+"/api/composer/dispatch", "application/json", bytes.NewReader(jsonBytes))
+	if err != nil {
+		t.Fatalf("failed to dispatch composer: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from composer dispatch, got %d", resp.StatusCode)
+	}
+	var resEvt inspector.WebhookEvent
+	_ = json.NewDecoder(resp.Body).Decode(&resEvt)
+	if resEvt.Response.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK in dispatched event response, got %d", resEvt.Response.StatusCode)
+	}
+}

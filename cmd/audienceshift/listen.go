@@ -68,6 +68,7 @@ func runListen(args []string) {
 	enableWeb := fs.Bool("web", defaultWeb, "Enable local embedded Web Studio dashboard")
 	webAddr := fs.String("web-addr", defaultWebAddr, "Local address for embedded Web Studio")
 	headless := fs.Bool("headless", defaultHeadless, "Run in headless mode without interactive TUI")
+	exportPath := fs.String("export", "", "File path to export captured webhook events upon exit (e.g. events.json)")
 
 	_ = fs.Parse(args)
 
@@ -142,6 +143,20 @@ func runListen(args []string) {
 	}()
 	defer client.Stop()
 
+	// Dump events to export file if requested upon exit
+	defer func() {
+		if *exportPath != "" && store != nil {
+			evts, err := store.List(10000)
+			if err == nil && len(evts) > 0 {
+				data, err := inspector.ExportJSON(evts, false)
+				if err == nil {
+					_ = os.WriteFile(*exportPath, data, 0644)
+					fmt.Printf("\n💾 Exported %d webhook events to %s\n", len(evts), *exportPath)
+				}
+			}
+		}
+	}()
+
 	// Handle OS interrupt signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -149,6 +164,16 @@ func runListen(args []string) {
 		<-sigCh
 		cancel()
 		client.Stop()
+		if *exportPath != "" && store != nil {
+			evts, err := store.List(10000)
+			if err == nil && len(evts) > 0 {
+				data, err := inspector.ExportJSON(evts, false)
+				if err == nil {
+					_ = os.WriteFile(*exportPath, data, 0644)
+					fmt.Printf("\n💾 Exported %d webhook events to %s\n", len(evts), *exportPath)
+				}
+			}
+		}
 		os.Exit(0)
 	}()
 

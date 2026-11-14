@@ -113,3 +113,144 @@ func TestANSISanitization(t *testing.T) {
 		t.Errorf("sanitization stripped readable text")
 	}
 }
+
+func TestTUITabToggle(t *testing.T) {
+	bus := inspector.NewEventBus()
+	defer bus.Close()
+	ch, unsub := bus.Subscribe(5)
+	defer unsub()
+
+	model := tui.NewModel("test-tunnel", "https://test.tunnel.com", "http://localhost:8080", ch, nil)
+
+	evt := inspector.NewWebhookEvent("test-tunnel", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/api/pay",
+		Body:   []byte(`{"status":"paid"}`),
+	})
+	evt.Response = inspector.HTTPResponse{
+		StatusCode: 200,
+		Headers: map[string][]string{
+			"Content-Type": {"application/json"},
+		},
+		Body: []byte(`{"result":"ok"}`),
+	}
+
+	updated, _ := model.Update(evt)
+	model = updated.(tui.Model)
+
+	// Default tab is Request
+	viewReq := model.View()
+	if !strings.Contains(viewReq, "[1] Request") || !strings.Contains(viewReq, "Headers:") {
+		t.Errorf("expected Request view")
+	}
+
+	// Press Tab to switch to Response tab
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(tui.Model)
+
+	viewResp := model.View()
+	if !strings.Contains(viewResp, "200 OK") || !strings.Contains(viewResp, "Response Body:") {
+		t.Errorf("expected Response view, got:\n%s", viewResp)
+	}
+
+	// Press Tab again to toggle back
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(tui.Model)
+	if !strings.Contains(model.View(), "Payload:") {
+		t.Errorf("expected toggle back to Request tab")
+	}
+}
+
+func TestTUIFiltering(t *testing.T) {
+	bus := inspector.NewEventBus()
+	defer bus.Close()
+	ch, unsub := bus.Subscribe(5)
+	defer unsub()
+
+	model := tui.NewModel("test-tunnel", "https://test.tunnel.com", "http://localhost:8080", ch, nil)
+
+	// Event 1: stripe
+	evt1 := inspector.NewWebhookEvent("test-tunnel", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/webhooks/stripe",
+		Body:   []byte(`{}`),
+	})
+	evt1.Provider = "stripe"
+	evt1.Response.StatusCode = 200
+
+	// Event 2: github
+	evt2 := inspector.NewWebhookEvent("test-tunnel", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/webhooks/github",
+		Body:   []byte(`{}`),
+	})
+	evt2.Provider = "github"
+	evt2.Response.StatusCode = 200
+
+	updated, _ := model.Update(evt1)
+	model = updated.(tui.Model)
+	updated, _ = model.Update(evt2)
+	model = updated.(tui.Model)
+
+	// Enter filter mode with '/'
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = updated.(tui.Model)
+
+	// Type "stripe"
+	for _, r := range "stripe" {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = updated.(tui.Model)
+	}
+
+	// Press Enter to confirm filter
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+
+	filteredView := model.View()
+	if !strings.Contains(filteredView, "stripe") {
+		t.Errorf("expected filtered view to contain stripe")
+	}
+	if strings.Contains(filteredView, "github") {
+		t.Errorf("expected filtered view to NOT contain github")
+	}
+
+	// Press Esc to clear filter
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(tui.Model)
+
+	clearedView := model.View()
+	if !strings.Contains(clearedView, "github") {
+		t.Errorf("expected cleared filter to show github again")
+	}
+}
+
+func TestTUIScrolling(t *testing.T) {
+	bus := inspector.NewEventBus()
+	defer bus.Close()
+	ch, unsub := bus.Subscribe(5)
+	defer unsub()
+
+	model := tui.NewModel("test-tunnel", "https://test.tunnel.com", "http://localhost:8080", ch, nil)
+
+	evt := inspector.NewWebhookEvent("test-tunnel", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/webhooks/large",
+		Body:   []byte("line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10"),
+	})
+	updated, _ := model.Update(evt)
+	model = updated.(tui.Model)
+
+	// Press PgDn
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = updated.(tui.Model)
+
+	// Press PgUp
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	model = updated.(tui.Model)
+
+	if !strings.Contains(model.View(), "large") {
+		t.Errorf("expected view to remain valid after scrolling")
+	}
+}

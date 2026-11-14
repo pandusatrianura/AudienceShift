@@ -204,3 +204,48 @@ func TestSubdomainHijackingProtection(t *testing.T) {
 		t.Fatalf("expected client 1's tunnel to remain active after attack attempt")
 	}
 }
+
+func TestServerHealthz(t *testing.T) {
+	srv := tunnel.NewServer("tunnel.example.com", "")
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("failed to query /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from /healthz, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"status":"healthy"`) {
+		t.Errorf("expected healthz response to contain healthy status, got %s", body)
+	}
+}
+
+func TestServerRateLimiter(t *testing.T) {
+	srv := tunnel.NewServer("tunnel.example.com", "")
+	srv.RateLimit = 2.0 // 2 req/sec
+	srv.RateBurst = 2.0 // burst of 2
+
+	// First 2 requests allowed
+	if !srv.AllowRequest("test-sub") {
+		t.Errorf("expected request 1 to be allowed")
+	}
+	if !srv.AllowRequest("test-sub") {
+		t.Errorf("expected request 2 to be allowed")
+	}
+
+	// 3rd rapid request should be throttled
+	if srv.AllowRequest("test-sub") {
+		t.Errorf("expected request 3 to be rate limited (exceeding burst)")
+	}
+
+	// Different subdomain should have its own separate quota
+	if !srv.AllowRequest("other-sub") {
+		t.Errorf("expected other subdomain to be allowed independently")
+	}
+}
