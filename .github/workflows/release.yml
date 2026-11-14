@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    name: Build & Release Multi-Arch Binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Build Cross-Platform Binaries
+        run: |
+          mkdir -p dist
+          PLATFORMS=(
+            "linux/amd64/audienceshift-linux-amd64"
+            "linux/arm64/audienceshift-linux-arm64"
+            "darwin/amd64/audienceshift-darwin-amd64"
+            "darwin/arm64/audienceshift-darwin-arm64"
+            "windows/amd64/audienceshift-windows-amd64.exe"
+            "windows/arm64/audienceshift-windows-arm64.exe"
+          )
+
+          for PLATFORM in "${PLATFORMS[@]}"; do
+            PARTS=(${PLATFORM//\// })
+            OS=${PARTS[0]}
+            ARCH=${PARTS[1]}
+            OUT="dist/${PARTS[2]}"
+
+            echo "Building $OS/$ARCH -> $OUT"
+            GOOS=$OS GOARCH=$ARCH CGO_ENABLED=0 go build -ldflags="-s -w" -o "$OUT" ./cmd/audienceshift
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+

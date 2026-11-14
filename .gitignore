@@ -25,9 +25,14 @@ vendor/
 # Artifacts & planning docs
 artifacts/superpowers/
 
-# Workflows
-.github/workflows/
-
 # Ignore all hidden files and directories (prefix with .)
 .*
 !.gitignore
+
+# Whitelist ONLY CI & Release workflows inside .github
+!.github/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/ci.yml
+!.github/workflows/release.yml

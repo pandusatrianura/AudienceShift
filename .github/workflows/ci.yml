@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test & Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: true
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Run Test Suite
+        run: go test -v ./...
+
+      - name: Build Binary
+        run: go build -ldflags="-s -w" -o bin/audienceshift ./cmd/audienceshift
+
+      - name: Check Binary Size
+        shell: bash
+        run: |
+          SIZE=$(wc -c < bin/audienceshift* | head -n 1)
+          MAX_SIZE=$((25 * 1024 * 1024))
+          echo "Binary size: $SIZE bytes (Max: $MAX_SIZE bytes)"
+          if [ $SIZE -gt $MAX_SIZE ]; then
+            echo "Binary size exceeds 25 MB limit!"
+            exit 1
+          fi
+          echo "Binary size is within 25 MB constraint!"
+
