@@ -10,6 +10,12 @@
 
 ---
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="AudienceShift Terminal TUI Demo" width="850">
+</p>
+
+---
+
 ```mermaid
 flowchart LR
     subgraph Cloud ["Public Internet / VPS"]
