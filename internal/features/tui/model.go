@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/pandusatrianura/AudienceShift/internal/features/inspector"
 	"github.com/pandusatrianura/AudienceShift/internal/features/replay"
+	"github.com/pandusatrianura/AudienceShift/internal/features/synthesizer"
 )
 
 type replayResultMsg string
@@ -24,6 +25,7 @@ type TabMode int
 const (
 	TabRequest TabMode = iota
 	TabResponse
+	TabTypes
 )
 
 // Model maintains the state for the terminal interactive Webhook Studio.
@@ -43,6 +45,7 @@ type Model struct {
 	scrollOffset int
 	filtering    bool
 	filterText   string
+	dlqOnly      bool
 
 	eventChan <-chan *inspector.WebhookEvent
 	replaySvc *replay.Service
@@ -95,18 +98,21 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) getFilteredEvents() []*inspector.WebhookEvent {
-	if m.filterText == "" {
-		return m.events
-	}
 	query := strings.ToLower(m.filterText)
 	var filtered []*inspector.WebhookEvent
 	for _, evt := range m.events {
-		if strings.Contains(strings.ToLower(evt.Request.Path), query) ||
-			strings.Contains(strings.ToLower(evt.Provider), query) ||
-			strings.Contains(strings.ToLower(evt.Request.Method), query) ||
-			strings.Contains(fmt.Sprintf("%d", evt.Response.StatusCode), query) {
-			filtered = append(filtered, evt)
+		if m.dlqOnly && !evt.IsFailed() {
+			continue
 		}
+		if m.filterText != "" {
+			if !strings.Contains(strings.ToLower(evt.Request.Path), query) &&
+				!strings.Contains(strings.ToLower(evt.Provider), query) &&
+				!strings.Contains(strings.ToLower(evt.Request.Method), query) &&
+				!strings.Contains(fmt.Sprintf("%d", evt.Response.StatusCode), query) {
+				continue
+			}
+		}
+		filtered = append(filtered, evt)
 	}
 	return filtered
 }
@@ -189,6 +195,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab = TabRequest
 			}
 			m.scrollOffset = 0
+			return m, nil
+
+		case "g":
+			if m.activeTab == TabTypes {
+				m.activeTab = TabRequest
+				m.statusMsg = "Switched to Request view."
+			} else {
+				m.activeTab = TabTypes
+				m.statusMsg = "Switched to Synthesized Types view (Go & TypeScript)."
+			}
+			m.scrollOffset = 0
+			return m, nil
+
+		case "x":
+			m.dlqOnly = !m.dlqOnly
+			m.cursor = 0
+			m.scrollOffset = 0
+			if m.dlqOnly {
+				m.statusMsg = "DLQ Filter: ON (showing failed webhooks only). Press x to toggle off."
+			} else {
+				m.statusMsg = "DLQ Filter: OFF (showing all webhooks)."
+			}
 			return m, nil
 
 		case "/":
@@ -346,13 +374,16 @@ func (m Model) View() string {
 		// Tab Switcher Header Bar
 		reqTab := InactiveTabStyle.Render(" [1] Request ")
 		respTab := InactiveTabStyle.Render(" [2] Response ")
+		typesTab := InactiveTabStyle.Render(" [3] Types (g) ")
 		if m.activeTab == TabRequest {
 			reqTab = ActiveTabStyle.Render(" [1] Request ")
-		} else {
+		} else if m.activeTab == TabResponse {
 			respTab = ActiveTabStyle.Render(" [2] Response ")
+		} else {
+			typesTab = ActiveTabStyle.Render(" [3] Types (g) ")
 		}
 
-		tabBar := reqTab + " " + respTab + "  " + SubheaderStyle.Render("(Tab to toggle)")
+		tabBar := reqTab + " " + respTab + " " + typesTab + "  " + SubheaderStyle.Render("(Tab to cycle)")
 		rightContent.WriteString(tabBar + "\n")
 		rightContent.WriteString(SubheaderStyle.Render(strings.Repeat("─", rightWidth-2)) + "\n")
 
@@ -408,7 +439,7 @@ func (m Model) View() string {
 				renderedCount++
 			}
 
-		} else {
+		} else if m.activeTab == TabResponse {
 			// Tab 2: Response View
 			statusStr := fmt.Sprintf("%d %s", selected.Response.StatusCode, http.StatusText(selected.Response.StatusCode))
 			if selected.Response.StatusCode == 0 {
@@ -470,6 +501,47 @@ func (m Model) View() string {
 					renderedCount++
 				}
 			}
+		} else {
+			// Tab 3: Synthesized Types View
+			rightContent.WriteString(fmt.Sprintf("%s | Provider: %s\n", MethodStyle.Render("Synthesized Schemas:"), ProviderBadge(selected.Provider)))
+			rightContent.WriteString(SubheaderStyle.Render(strings.Repeat("─", rightWidth-2)) + "\n")
+
+			if len(selected.Request.Body) == 0 {
+				rightContent.WriteString("  " + SubheaderStyle.Render("(event has no body to synthesize)") + "\n")
+			} else {
+				typeName := strings.ToUpper(selected.Provider[:1]) + selected.Provider[1:] + "Payload"
+				types, err := synthesizer.Synthesize(typeName, selected.Request.Body)
+				if err != nil {
+					rightContent.WriteString(StatusErrorStyle.Render("Synthesis Error: ") + err.Error() + "\n")
+				} else {
+					var allLines []string
+					allLines = append(allLines, "// ─── GO STRUCTS ──────────────────────────────")
+					allLines = append(allLines, strings.Split(types.Go, "\n")...)
+					allLines = append(allLines, "", "// ─── TYPESCRIPT INTERFACE ───────────────────")
+					allLines = append(allLines, strings.Split(types.TypeScript, "\n")...)
+					allLines = append(allLines, "", "// ─── ZOD SCHEMA ─────────────────────────────")
+					allLines = append(allLines, strings.Split(types.Zod, "\n")...)
+
+					startLine := m.scrollOffset
+					if startLine >= len(allLines) {
+						startLine = 0
+					}
+					renderedCount := 0
+					for idx := startLine; idx < len(allLines); idx++ {
+						if renderedCount > paneHeight-14 {
+							rightContent.WriteString(SubheaderStyle.Render(fmt.Sprintf("... (%d more lines - PgDn to scroll)", len(allLines)-idx)) + "\n")
+							break
+						}
+						line := allLines[idx]
+						if strings.HasPrefix(line, "//") {
+							rightContent.WriteString("  " + MethodStyle.Render(line) + "\n")
+						} else {
+							rightContent.WriteString("  " + truncate(sanitizeTerminalString(line), rightWidth-4) + "\n")
+						}
+						renderedCount++
+					}
+				}
+			}
 		}
 
 	} else {
@@ -508,10 +580,11 @@ func (m Model) View() string {
 			HelpDescStyle.Render("█  (Enter to apply, Esc to cancel)"),
 		)
 	} else {
-		footer = fmt.Sprintf("[%s] %s | %s %s  %s %s  %s %s  %s %s  %s %s  %s %s  %s %s",
+		footer = fmt.Sprintf("[%s] %s | %s %s  %s %s  %s %s  %s %s  %s %s  %s %s  %s %s  %s %s",
 			m.TunnelID,
 			m.statusMsg,
-			HelpKeyStyle.Render("Tab:"), HelpDescStyle.Render("Req/Resp"),
+			HelpKeyStyle.Render("Tab/g:"), HelpDescStyle.Render("Types"),
+			HelpKeyStyle.Render("x:"), HelpDescStyle.Render("DLQ"),
 			HelpKeyStyle.Render("↑/↓:"), HelpDescStyle.Render("Nav"),
 			HelpKeyStyle.Render("PgUp/Dn:"), HelpDescStyle.Render("Scroll"),
 			HelpKeyStyle.Render("/:"), HelpDescStyle.Render("Filter"),

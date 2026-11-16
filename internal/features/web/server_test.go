@@ -235,3 +235,108 @@ func TestWebServerExportAndComposer(t *testing.T) {
 		t.Fatalf("expected 200 OK in dispatched event response, got %d", resEvt.Response.StatusCode)
 	}
 }
+
+func TestWebServerDLQAndSynthesizer(t *testing.T) {
+	localApp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"recovered":true}`))
+	}))
+	defer localApp.Close()
+
+	store := inspector.NewMemoryStore(10)
+	bus := inspector.NewEventBus()
+	defer bus.Close()
+	replaySvc := replay.NewService(store, bus, localApp.URL)
+
+	// 1. Add a failed event
+	evt := inspector.NewWebhookEvent("test-tun", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/webhooks/order",
+		Body:   []byte(`{"order_id":"ORD_123","amount":150.50,"customer":{"id":"cus_1"}}`),
+	})
+	evt.Response = inspector.HTTPResponse{
+		StatusCode: 500,
+		Error:      "internal server error",
+	}
+	_ = store.Save(evt)
+
+	webServer := web.NewServer(web.ServerOptions{
+		TunnelID:    "test-tun",
+		PublicURL:   "https://test-tun.tunnel.com",
+		LocalTarget: localApp.URL,
+		Store:       store,
+		Bus:         bus,
+		ReplaySvc:   replaySvc,
+	})
+
+	ts := httptest.NewServer(webServer)
+	defer ts.Close()
+
+	// 2. Query /api/dlq
+	resp, err := http.Get(ts.URL + "/api/dlq")
+	if err != nil {
+		t.Fatalf("failed to query /api/dlq: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from /api/dlq, got %d", resp.StatusCode)
+	}
+	var dlqRes struct {
+		Count  int                       `json:"count"`
+		Events []*inspector.WebhookEvent `json:"events"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&dlqRes)
+	if dlqRes.Count != 1 || len(dlqRes.Events) != 1 {
+		t.Fatalf("expected 1 failed event in DLQ, got %d", dlqRes.Count)
+	}
+
+	// 3. Resend DLQ via /api/dlq/resend
+	resendBody := []byte(`{"limit":10,"interval_ms":10}`)
+	resp, err = http.Post(ts.URL+"/api/dlq/resend", "application/json", bytes.NewReader(resendBody))
+	if err != nil {
+		t.Fatalf("failed to post /api/dlq/resend: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from /api/dlq/resend, got %d", resp.StatusCode)
+	}
+	var resendRes replay.DLQResendResult
+	_ = json.NewDecoder(resp.Body).Decode(&resendRes)
+	if resendRes.TotalProcessed != 1 || resendRes.SuccessCount != 1 {
+		t.Fatalf("expected 1 processed & 1 succeeded, got %+v", resendRes)
+	}
+
+	// 4. Query /api/events/types?id=...
+	resp, err = http.Get(ts.URL + "/api/events/types?id=" + evt.ID)
+	if err != nil {
+		t.Fatalf("failed to query /api/events/types: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from /api/events/types, got %d", resp.StatusCode)
+	}
+	var typesRes struct {
+		Go         string `json:"go"`
+		TypeScript string `json:"typescript"`
+		Zod        string `json:"zod"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&typesRes)
+	if !strings.Contains(typesRes.Go, "OrderID") || !strings.Contains(typesRes.TypeScript, "order_id") {
+		t.Fatalf("unexpected synthesized types: %+v", typesRes)
+	}
+
+	// 5. Post ad-hoc /api/synthesizer
+	adhocJSON := []byte(`{"user":{"name":"Alice","email":"alice@example.com"}}`)
+	resp, err = http.Post(ts.URL+"/api/synthesizer?name=UserPayload", "application/json", bytes.NewReader(adhocJSON))
+	if err != nil {
+		t.Fatalf("failed to post /api/synthesizer: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from /api/synthesizer, got %d", resp.StatusCode)
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&typesRes)
+	if !strings.Contains(typesRes.Go, "type UserPayload struct") {
+		t.Fatalf("expected UserPayload struct in generated Go: %s", typesRes.Go)
+	}
+}

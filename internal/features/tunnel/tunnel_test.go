@@ -249,3 +249,121 @@ func TestServerRateLimiter(t *testing.T) {
 		t.Errorf("expected other subdomain to be allowed independently")
 	}
 }
+
+func TestTunnelMultiClientFanout(t *testing.T) {
+	// 1. Two local mock applications
+	received1 := make(chan string, 1)
+	localApp1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		received1 <- string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"client":"1"}`))
+	}))
+	defer localApp1.Close()
+
+	received2 := make(chan string, 1)
+	localApp2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		received2 <- string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"client":"2"}`))
+	}))
+	defer localApp2.Close()
+
+	// 2. Tunnel Server
+	tunnelServer := tunnel.NewServer("tunnel.example.com", "shared-token")
+	tsServer := httptest.NewServer(tunnelServer)
+	defer tsServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(tsServer.URL, "http") + tunnel.ConnectPath
+
+	// 3. Connect Client 1 (Alice) to "shared-subdomain"
+	store1 := inspector.NewMemoryStore(10)
+	bus1 := inspector.NewEventBus()
+	defer bus1.Close()
+
+	client1 := tunnel.NewClient(tunnel.ClientOptions{
+		ServerURL:   wsURL,
+		TunnelID:    "shared-subdomain",
+		AuthToken:   "shared-token",
+		LocalTarget: localApp1.URL,
+		Store:       store1,
+		Bus:         bus1,
+	})
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	go func() { _ = client1.Start(ctx1) }()
+	defer client1.Stop()
+
+	// Connect Client 2 (Bob) to SAME "shared-subdomain"
+	store2 := inspector.NewMemoryStore(10)
+	bus2 := inspector.NewEventBus()
+	defer bus2.Close()
+
+	client2 := tunnel.NewClient(tunnel.ClientOptions{
+		ServerURL:   wsURL,
+		TunnelID:    "shared-subdomain",
+		AuthToken:   "shared-token",
+		LocalTarget: localApp2.URL,
+		Store:       store2,
+		Bus:         bus2,
+	})
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	go func() { _ = client2.Start(ctx2) }()
+	defer client2.Stop()
+
+	// Wait for both to connect
+	time.Sleep(200 * time.Millisecond)
+
+	if count := tunnelServer.ActiveCount(); count != 2 {
+		t.Fatalf("expected 2 active client sessions on server, got %d", count)
+	}
+
+	// 4. Send 1 external webhook request to "shared-subdomain"
+	webhookReq, err := http.NewRequest("POST", tsServer.URL+"/webhooks/order", strings.NewReader(`{"order_id":"ORD-FANOUT-1"}`))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	webhookReq.Header.Set(tunnel.HeaderTunnelID, "shared-subdomain")
+	webhookReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(webhookReq)
+	if err != nil {
+		t.Fatalf("webhook request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	// 5. Verify BOTH client 1 and client 2 received the multicast webhook!
+	select {
+	case body1 := <-received1:
+		if !strings.Contains(body1, "ORD-FANOUT-1") {
+			t.Errorf("client 1 received incorrect body: %s", body1)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for client 1 to receive fanout webhook")
+	}
+
+	select {
+	case body2 := <-received2:
+		if !strings.Contains(body2, "ORD-FANOUT-1") {
+			t.Errorf("client 2 received incorrect body: %s", body2)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for client 2 to receive fanout webhook")
+	}
+
+	// Verify both local stores captured the event
+	if store1.Count() != 1 {
+		t.Errorf("expected store 1 to capture 1 event, got %d", store1.Count())
+	}
+	if store2.Count() != 1 {
+		t.Errorf("expected store 2 to capture 1 event, got %d", store2.Count())
+	}
+}

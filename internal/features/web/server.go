@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/pandusatrianura/AudienceShift/internal/features/catalog"
 	"github.com/pandusatrianura/AudienceShift/internal/features/inspector"
 	"github.com/pandusatrianura/AudienceShift/internal/features/replay"
+	"github.com/pandusatrianura/AudienceShift/internal/features/synthesizer"
 )
 
 // ServerOptions configures the embedded web studio.
@@ -60,6 +62,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/catalog", s.handleCatalog)
 	s.mux.HandleFunc("/api/catalog/trigger", s.handleCatalogTrigger)
 	s.mux.HandleFunc("/api/composer/dispatch", s.handleComposerDispatch)
+	s.mux.HandleFunc("/api/dlq", s.handleDLQ)
+	s.mux.HandleFunc("/api/dlq/resend", s.handleDLQResend)
+	s.mux.HandleFunc("/api/events/types", s.handleEventTypes)
+	s.mux.HandleFunc("/api/synthesizer", s.handleSynthesizer)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -431,4 +437,116 @@ func (s *Server) handleComposerDispatch(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(replayed)
+}
+
+func (s *Server) handleDLQ(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 50
+	if lStr := r.URL.Query().Get("limit"); lStr != "" {
+		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+	failed, err := s.opts.Store.ListFailed(limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to retrieve DLQ: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"count":  len(failed),
+		"events": failed,
+	})
+}
+
+func (s *Server) handleDLQResend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.opts.ReplaySvc == nil {
+		http.Error(w, "Replay service not configured", http.StatusInternalServerError)
+		return
+	}
+	var req struct {
+		Limit      int    `json:"limit"`
+		IntervalMs int    `json:"interval_ms"`
+		TargetURL  string `json:"target_url"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	interval := 50 * time.Millisecond
+	if req.IntervalMs > 0 {
+		interval = time.Duration(req.IntervalMs) * time.Millisecond
+	}
+	result, err := s.opts.ReplaySvc.ResendDLQ(r.Context(), replay.DLQResendOptions{
+		Limit:     req.Limit,
+		Interval:  interval,
+		TargetURL: req.TargetURL,
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("DLQ resend failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func (s *Server) handleEventTypes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "Missing event id parameter", http.StatusBadRequest)
+		return
+	}
+	evt, err := s.opts.Store.GetByID(id)
+	if err != nil {
+		http.Error(w, "Event not found", http.StatusNotFound)
+		return
+	}
+	if len(evt.Request.Body) == 0 {
+		http.Error(w, "Event has empty body", http.StatusBadRequest)
+		return
+	}
+	typeName := r.URL.Query().Get("name")
+	if typeName == "" {
+		typeName = evt.Provider + "Payload"
+	}
+	types, err := synthesizer.Synthesize(typeName, evt.Request.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to synthesize types: %v", err), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(types)
+}
+
+func (s *Server) handleSynthesizer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024))
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+	typeName := r.URL.Query().Get("name")
+	if typeName == "" {
+		typeName = "GeneratedPayload"
+	}
+	types, err := synthesizer.Synthesize(typeName, body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to synthesize types: %v", err), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(types)
 }

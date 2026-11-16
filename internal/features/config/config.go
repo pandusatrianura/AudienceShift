@@ -30,6 +30,8 @@ type Config struct {
 	Web           bool                 `yaml:"web"`
 	WebAddr       string               `yaml:"web_addr"`
 	Headless      bool                 `yaml:"headless"`
+	DBPath        string               `yaml:"db"`
+	MemoryOnly    bool                 `yaml:"memory_only"`
 	Secrets       map[string]string    `yaml:"secrets"`
 	CustomPresets []CustomPresetConfig `yaml:"custom_presets"`
 }
@@ -173,6 +175,11 @@ func Load(path string) (*Config, error) {
 		case "headless":
 			b, _ := strconv.ParseBool(val)
 			cfg.Headless = b
+		case "db":
+			cfg.DBPath = val
+		case "memory_only":
+			b, _ := strconv.ParseBool(val)
+			cfg.MemoryOnly = b
 		case "secrets":
 			inSecretsBlock = true
 		case "custom_presets":

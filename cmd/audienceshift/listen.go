@@ -14,6 +14,7 @@ import (
 	"github.com/pandusatrianura/AudienceShift/internal/features/config"
 	"github.com/pandusatrianura/AudienceShift/internal/features/inspector"
 	"github.com/pandusatrianura/AudienceShift/internal/features/replay"
+	"github.com/pandusatrianura/AudienceShift/internal/features/storage"
 	"github.com/pandusatrianura/AudienceShift/internal/features/tui"
 	"github.com/pandusatrianura/AudienceShift/internal/features/tunnel"
 	"github.com/pandusatrianura/AudienceShift/internal/features/web"
@@ -32,6 +33,8 @@ func runListen(args []string) {
 	defaultWeb := false
 	defaultWebAddr := ":4040"
 	defaultHeadless := false
+	defaultDB := ".audienceshift.db"
+	defaultMemoryOnly := false
 
 	if fileCfg != nil {
 		if fileCfg.Server != "" {
@@ -58,6 +61,12 @@ func runListen(args []string) {
 		if fileCfg.Headless {
 			defaultHeadless = true
 		}
+		if fileCfg.DBPath != "" {
+			defaultDB = fileCfg.DBPath
+		}
+		if fileCfg.MemoryOnly {
+			defaultMemoryOnly = true
+		}
 	}
 
 	fs := flag.NewFlagSet("listen", flag.ExitOnError)
@@ -69,6 +78,8 @@ func runListen(args []string) {
 	webAddr := fs.String("web-addr", defaultWebAddr, "Local address for embedded Web Studio")
 	headless := fs.Bool("headless", defaultHeadless, "Run in headless mode without interactive TUI")
 	exportPath := fs.String("export", "", "File path to export captured webhook events upon exit (e.g. events.json)")
+	dbPath := fs.String("db", defaultDB, "Path to persistent BoltDB database file (default: .audienceshift.db)")
+	memoryOnly := fs.Bool("memory-only", defaultMemoryOnly, "Disable persistent storage and use ephemeral in-memory buffer")
 
 	_ = fs.Parse(args)
 
@@ -96,8 +107,20 @@ func runListen(args []string) {
 	// Calculate display public URL
 	publicURL := fmt.Sprintf("https://%s.%s", *tunnelID, extractHostFromWS(*serverURL))
 
-	// Core instances
-	store := inspector.NewMemoryStore(1000)
+	// Core instances: persistent BoltDB by default, or ephemeral in-memory if --memory-only
+	var store inspector.EventStore
+	if *memoryOnly {
+		store = inspector.NewMemoryStore(1000)
+	} else {
+		boltStore, err := storage.NewBoltStore(*dbPath)
+		if err != nil {
+			log.Printf("[Storage] Notice: Failed to open persistent DB %q (%v), falling back to in-memory store", *dbPath, err)
+			store = inspector.NewMemoryStore(1000)
+		} else {
+			store = boltStore
+			defer store.Close()
+		}
+	}
 	bus := inspector.NewEventBus()
 	defer bus.Close()
 

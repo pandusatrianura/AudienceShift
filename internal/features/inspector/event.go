@@ -211,6 +211,17 @@ func DetectProvider(headers map[string][]string) string {
 	return "generic"
 }
 
+// IsFailed returns true if the forwarded response returned a 4xx/5xx error or a connection/network error.
+func (e *WebhookEvent) IsFailed() bool {
+	if e.Response.Error != "" {
+		return true
+	}
+	if e.Response.StatusCode >= 400 {
+		return true
+	}
+	return false
+}
+
 // PrettyJSONBody returns an indented, human-readable representation of the body if valid JSON, or raw string.
 func (r *HTTPRequest) PrettyJSONBody() string {
 	if len(r.Body) == 0 {

@@ -28,6 +28,12 @@
         <input type="text" id="search-input" class="search-input" placeholder="Filter webhooks..." />
         <button class="btn btn-secondary" onclick="clearEvents()" title="Clear history">Clear</button>
       </div>
+      <div style="padding: 6px 12px; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--border-color); font-size: 0.78rem;">
+        <span style="color: var(--text-muted);">View:</span>
+        <button id="filter-all" class="btn" onclick="setFilterMode('all')" style="padding: 2px 8px; font-size: 0.72rem;">All</button>
+        <button id="filter-dlq" class="btn btn-secondary" onclick="setFilterMode('dlq')" style="padding: 2px 8px; font-size: 0.72rem; color: #ef4444;">DLQ (<span id="dlq-count">0</span>)</button>
+        <button id="btn-resend-dlq" class="btn" onclick="resendDLQ()" style="padding: 2px 8px; font-size: 0.72rem; margin-left: auto; display: none; background: #ef4444; color: white;">⚡ Resend DLQ</button>
+      </div>
       <ul id="event-list" class="event-list"></ul>
     </div>
 
@@ -48,6 +54,7 @@
         <div class="tab active" data-tab="payload">Payload</div>
         <div class="tab" data-tab="headers">Headers</div>
         <div class="tab" data-tab="response">Response</div>
+        <div class="tab" data-tab="types">Types (Go/TS/Zod)</div>
         <div class="tab" data-tab="mutate">Replay & Mutate</div>
         <div class="tab" data-tab="composer">Composer</div>
         <div class="tab" data-tab="catalog">Preset Catalog</div>

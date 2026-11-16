@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,7 +82,7 @@ type Server struct {
 	RateBurst  float64 // default 100.0
 
 	mu       sync.RWMutex
-	tunnels  map[string]*TunnelSession
+	tunnels  map[string][]*TunnelSession
 	limiters map[string]*TokenBucket
 	upgrader websocket.Upgrader
 }
@@ -94,7 +95,7 @@ func NewServer(baseDomain string, authToken string) *Server {
 		StartTime:  time.Now(),
 		RateLimit:  60.0,
 		RateBurst:  100.0,
-		tunnels:    make(map[string]*TunnelSession),
+		tunnels:    make(map[string][]*TunnelSession),
 		limiters:   make(map[string]*TokenBucket),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -124,64 +125,99 @@ func (s *Server) AllowRequest(tunnelID string) bool {
 }
 
 // RegisterTunnel safely binds a tunnel ID to an active yamux session with ownership verification.
+// If multiple clients connect with the same valid token/subdomain, they are joined into a fanout pool.
 func (s *Server) RegisterTunnel(id string, token string, session *yamux.Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if existing, exists := s.tunnels[id]; exists {
-		if !existing.Session.IsClosed() {
-			// Subdomain collision check: only allow takeover if matching token
-			if s.AuthToken != "" && existing.Token != token {
+	sessions := s.tunnels[id]
+	active := make([]*TunnelSession, 0, len(sessions)+1)
+	for _, sess := range sessions {
+		if !sess.Session.IsClosed() {
+			if s.AuthToken != "" && sess.Token != token {
 				return ErrTunnelAlreadyClaimed
 			}
-			// If reconnecting from same client or token, close stale previous session
-			_ = existing.Session.Close()
+			active = append(active, sess)
 		}
 	}
 
-	s.tunnels[id] = &TunnelSession{
+	active = append(active, &TunnelSession{
 		ID:          id,
 		Token:       token,
 		Session:     session,
 		ConnectedAt: time.Now(),
-	}
+	})
+	s.tunnels[id] = active
 	return nil
 }
 
-// UnregisterTunnel removes a tunnel ID only if the active session matches the caller's session.
+// UnregisterTunnel removes a specific session from a tunnel ID's fanout pool.
 func (s *Server) UnregisterTunnel(id string, session *yamux.Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if existing, exists := s.tunnels[id]; exists {
-		// Only delete if it's the exact same session instance, preventing ghost cleanup races
-		if session == nil || existing.Session == session {
-			_ = existing.Session.Close()
-			delete(s.tunnels, id)
-			delete(s.limiters, id)
+	sessions, exists := s.tunnels[id]
+	if !exists {
+		return
+	}
+
+	active := make([]*TunnelSession, 0, len(sessions))
+	for _, sess := range sessions {
+		if session == nil || sess.Session == session {
+			_ = sess.Session.Close()
+			continue
+		}
+		if !sess.Session.IsClosed() {
+			active = append(active, sess)
 		}
 	}
+
+	if len(active) == 0 {
+		delete(s.tunnels, id)
+		delete(s.limiters, id)
+	} else {
+		s.tunnels[id] = active
+	}
 }
 
-// GetTunnel retrieves the yamux session for a given tunnel ID.
-func (s *Server) GetTunnel(id string) (*yamux.Session, bool) {
+// GetTunnels retrieves all active yamux sessions for a given tunnel ID.
+func (s *Server) GetTunnels(id string) []*yamux.Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	sess, ok := s.tunnels[id]
-	if !ok || sess.Session.IsClosed() {
-		return nil, false
+
+	sessions, ok := s.tunnels[id]
+	if !ok {
+		return nil
 	}
-	return sess.Session, true
+
+	var active []*yamux.Session
+	for _, sess := range sessions {
+		if !sess.Session.IsClosed() {
+			active = append(active, sess.Session)
+		}
+	}
+	return active
 }
 
-// ActiveCount returns the number of currently connected tunnels.
+// GetTunnel retrieves the primary yamux session for a given tunnel ID.
+func (s *Server) GetTunnel(id string) (*yamux.Session, bool) {
+	active := s.GetTunnels(id)
+	if len(active) == 0 {
+		return nil, false
+	}
+	return active[0], true
+}
+
+// ActiveCount returns the number of currently connected tunnels across all sessions.
 func (s *Server) ActiveCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	count := 0
-	for _, t := range s.tunnels {
-		if !t.Session.IsClosed() {
-			count++
+	for _, sessions := range s.tunnels {
+		for _, sess := range sessions {
+			if !sess.Session.IsClosed() {
+				count++
+			}
 		}
 	}
 	return count
@@ -288,8 +324,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, ok := s.GetTunnel(tunnelID)
-	if !ok || session.IsClosed() {
+	sessions := s.GetTunnels(tunnelID)
+	if len(sessions) == 0 {
 		http.Error(w, fmt.Sprintf("AudienceShift: Tunnel %q is offline", tunnelID), http.StatusBadGateway)
 		return
 	}
@@ -305,39 +341,91 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Open multiplexed stream to connected client
-	stream, err := session.OpenStream()
+	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "AudienceShift: Failed to open stream to local tunnel client", http.StatusBadGateway)
+		http.Error(w, "AudienceShift: Failed to read incoming request body", http.StatusBadRequest)
 		return
 	}
-	defer stream.Close()
 
-	// 4. Enforce strict I/O deadline on stream to prevent goroutine leaks on stalled clients
-	_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
-
-	// 5. Forward incoming HTTP request across yamux stream
 	r.Header.Set("X-Forwarded-Host", r.Host)
 	r.Header.Set("X-Forwarded-Proto", "https")
-	if err := r.Write(stream); err != nil {
-		http.Error(w, "AudienceShift: Failed to write request to tunnel stream", http.StatusBadGateway)
+
+	type clientResult struct {
+		statusCode int
+		header     http.Header
+		body       []byte
+		err        error
+	}
+
+	resultCh := make(chan clientResult, len(sessions))
+
+	// Fanout concurrently to all connected client sessions on this tunnel
+	for _, sess := range sessions {
+		go func(s *yamux.Session) {
+			stream, err := s.OpenStream()
+			if err != nil {
+				resultCh <- clientResult{err: err}
+				return
+			}
+			defer stream.Close()
+
+			_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
+
+			// Clone request with independent body reader for each client
+			clonedReq := r.Clone(r.Context())
+			clonedReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			clonedReq.ContentLength = int64(len(bodyBytes))
+
+			if err := clonedReq.Write(stream); err != nil {
+				resultCh <- clientResult{err: err}
+				return
+			}
+
+			resp, err := http.ReadResponse(bufio.NewReader(stream), clonedReq)
+			if err != nil {
+				resultCh <- clientResult{err: err}
+				return
+			}
+			defer resp.Body.Close()
+
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, DefaultMaxBodySize))
+			resultCh <- clientResult{
+				statusCode: resp.StatusCode,
+				header:     resp.Header,
+				body:       respBody,
+			}
+		}(sess)
+	}
+
+	// Capture the first successful client response to return to the public webhook provider
+	var primaryResp *clientResult
+	var lastErr error
+	for i := 0; i < len(sessions); i++ {
+		res := <-resultCh
+		if res.err != nil {
+			lastErr = res.err
+			continue
+		}
+		if primaryResp == nil {
+			primaryResp = &res
+			break
+		}
+	}
+
+	if primaryResp == nil {
+		errMsg := "AudienceShift: All connected local tunnel clients failed to process request"
+		if lastErr != nil {
+			errMsg = fmt.Sprintf("AudienceShift: Failed to reach local tunnel client: %v", lastErr)
+		}
+		http.Error(w, errMsg, http.StatusBadGateway)
 		return
 	}
 
-	// 6. Read response back from local tunnel client
-	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
-	if err != nil {
-		http.Error(w, "AudienceShift: Failed to read response from local tunnel client", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	// 7. Relay response back to external webhook caller
-	for k, vv := range resp.Header {
+	for k, vv := range primaryResp.header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
 	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	w.WriteHeader(primaryResp.statusCode)
+	_, _ = w.Write(primaryResp.body)
 }

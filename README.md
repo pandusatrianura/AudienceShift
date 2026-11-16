@@ -44,34 +44,42 @@ flowchart LR
 ## ⚡ Killer Features
 
 1. **🛡️ Sovereign Self-Hosted Tunnel (Zero Paywalls & No Limits):**  
-   Run a single Go binary on any \$3–\$5 VPS. Own your custom domain, get automatic TLS certificates via Let's Encrypt (ACME), and eliminate Ngrok rate limits, bandwidth fees, interstitial warning screens, and third-party data tracking.
-2. **✈️ Offline Standalone Mock Webhook Receiver (`mock` Mode):**  
+   Run a single Go binary on any $3–$5 VPS. Own your custom domain, get automatic TLS certificates via Let's Encrypt (ACME), and eliminate Ngrok rate limits, bandwidth fees, interstitial warning screens, and third-party data tracking.
+2. **👥 Collaborative Multi-Client Webhook Fanout:**  
+   Multiple developers or staging services can connect to the *same* tunnel identifier simultaneously (`audienceshift listen --id team-shared 3000`). The relay server multicasts incoming public webhooks concurrently across all connected sessions, capturing local execution and TUI inspection on all machines without needing multiple ngrok accounts or URLs.
+3. **💾 Embedded Persistent Storage & Dead Letter Queue (DLQ):**  
+   Automatically persists captured webhooks into a local embedded BoltDB file (`.audienceshift.db`) across restarts (pure Go, zero external databases, with `--memory-only` opt-out). Tracks failed deliveries in a Dead Letter Queue with paced bulk resend capabilities (`audienceshift` Web Studio and API).
+4. **🧬 1-Click Type & Schema Synthesizer (Go, TypeScript & Zod):**  
+   Press `g` in the Terminal TUI or click the **Types** tab in Web Studio to instantly generate idiomatic Go structs (with `json:"..."` tags), TypeScript interfaces, and runtime Zod schemas directly from any captured JSON payload.
+5. **✈️ Offline Standalone Mock Webhook Receiver (`mock` Mode):**  
    Working on a plane, train, or isolated Docker network? Run `audienceshift mock 3000` to capture, inspect, and replay webhooks locally—100% offline without needing a VPS or internet connection.
-3. **⚡ 1-Key Replay & In-Place Mutation Engine:**  
+6. **⚡ 1-Key Replay & In-Place Mutation Engine:**  
    Highlight any received webhook in your terminal and press `r` to instantly re-fire it against `localhost:8080`. Press `m` or use the Web Studio to mutate headers and JSON payloads to test edge cases without touching third-party dashboards.
-4. **🔐 Smart Signature Auto-Detection & Recalculation:**  
+7. **🔐 Smart Signature Auto-Detection & Recalculation:**  
    Detects provider HMAC signatures and verification tokens across **Stripe** (with timestamp tolerance refresh), **Midtrans** (SHA-512 `signature_key`), **GitHub** (`X-Hub-Signature-256`), **Slack** (`v0=...`), **Shopify** (`X-Shopify-Hmac-Sha256`), **Xendit** (`X-Callback-Token`), **GitLab** (`X-Gitlab-Token`), **Discord** (`X-Signature-Ed25519`), and **Twilio** (`X-Twilio-Signature`). When mutating payloads, AudienceShift automatically recalculates valid cryptographic signatures using your test secret so your local verification middleware passes.
-5. **🔒 Built-in Privacy & Sensitive Data Masking:**  
+8. **🔒 Built-in Privacy & Sensitive Data Masking:**  
    Automatic masking of `Authorization: Bearer ****`, `Cookie`, `X-Api-Key`, `X-Callback-Token`, and `X-Gitlab-Token` in both the Terminal TUI and Web Studio (with an interactive 1-click `[👁️ Reveal]` toggle for safe screen sharing and live streaming).
-6. **📋 Developer Ergonomics & Full Observability:**  
-   - **Terminal TUI Tab Toggle (`Tab`):** Instantly switch between `[Request]` and `[Response]` to inspect local backend status codes, latency, response headers, and JSON error bodies directly from your terminal.
+9. **📋 Developer Ergonomics & Full Observability:**  
+   - **Terminal TUI Tab Toggle (`Tab` / `g`):** Instantly switch between `[Request]`, `[Response]`, and `[Types]` to inspect local backend status codes, latency, response headers, JSON error bodies, and synthesized types directly from your terminal.
    - **Vertical Payload Scrolling (`PgUp` / `PgDn`):** Smoothly scroll through massive payloads and multi-line traces.
-   - **Interactive Live Filter (`/`):** Filter incoming webhooks on the fly by provider, HTTP method, or path.
+   - **Interactive Live Filter (`/`) & DLQ Toggle (`x`):** Filter incoming webhooks on the fly by provider, HTTP method, or path, or press `x` to isolate failed webhooks.
    - **1-Key "Copy as cURL":** Press `y` in the TUI to export the selected webhook directly to your system clipboard via ANSI OSC 52, or click the `📋 Copy as cURL` button in Web Studio.
    - **Config Auto-Discovery:** Reads `.audienceshift.yaml` automatically so you can just type `audienceshift listen` with zero repetitive flags.
-7. **🪟 Dual-Mode Studio (Terminal TUI + Embedded Web UI):**  
-   - **Terminal TUI (Default):** Interactive split-pane terminal UI built with Bubbletea. Fast, responsive, keyboard-driven navigation (`Tab` toggle, `↑`/`↓`, `PgUp`/`PgDn`, `/` filter, `Space` pause, `r` replay, `y` copy cURL, `q` quit).
-   - **Web Studio (`--web` flag):** Zero-npm, embedded dashboard at `http://localhost:4040` (auto port fallback `:4040` $\rightarrow$ `:4041`..`:4060`) featuring:
-     - **Custom Webhook Composer:** Scratchpad to build, sign, and dispatch custom webhooks from scratch.
-     - **Session Export:** Download captured webhooks in 1 click as JSON or Postman Collection v2.1 (or via CLI `--export events.json`).
-     - **Response Diffing:** Visual side-by-side comparison between original and replayed responses.
-8. **🛡️ Production Hardening & Ingress Protection:**  
-   - **Healthcheck Endpoint (`GET /healthz`):** Built-in Docker/Kubernetes readiness and uptime monitor probe.
-   - **Anti-DDoS Ingress Rate Limiting:** Token-bucket rate limiter per tunnel subdomain protecting local developer machines from flood attacks.
-   - **Memory Guard:** Strict 10MB payload and response size limits preventing Out-Of-Memory (OOM) poison pills.
-9. **🧪 Automated CI/CD Compliance Runner (`verify` Command):**  
-   Run `audienceshift verify` in GitHub Actions or locally to audit whether your webhook handlers properly enforce cryptographic signature validation, reject forged headers, block expired replay timestamps, and handle duplicate deliveries idempotently.
-10. **🎲 Universal Webhook Preset Catalog & Chaos Simulator:**  
+10. **🪟 Dual-Mode Studio (Terminal TUI + Embedded Web UI):**  
+    - **Terminal TUI (Default):** Interactive split-pane terminal UI built with Bubbletea. Fast, responsive, keyboard-driven navigation (`Tab` toggle, `g` types, `x` DLQ, `↑`/`↓`, `PgUp`/`PgDn`, `/` filter, `Space` pause, `r` replay, `y` copy cURL, `q` quit).
+    - **Web Studio (`--web` flag):** Zero-npm, embedded dashboard at `http://localhost:4040` (auto port fallback `:4040` $\rightarrow$ `:4041`..`:4060`) featuring:
+      - **Type Synthesizer:** View and 1-click copy Go Structs, TypeScript interfaces, or Zod schemas.
+      - **Dead Letter Queue (DLQ):** Filter failed webhooks and trigger rate-limited bulk replays.
+      - **Custom Webhook Composer:** Scratchpad to build, sign, and dispatch custom webhooks from scratch.
+      - **Session Export:** Download captured webhooks in 1 click as JSON or Postman Collection v2.1 (or via CLI `--export events.json`).
+      - **Response Diffing:** Visual side-by-side comparison between original and replayed responses.
+11. **🛡️ Production Hardening & Ingress Protection:**  
+    - **Healthcheck Endpoint (`GET /healthz`):** Built-in Docker/Kubernetes readiness and uptime monitor probe.
+    - **Anti-DDoS Ingress Rate Limiting:** Token-bucket rate limiter per tunnel subdomain protecting local developer machines from flood attacks.
+    - **Memory Guard:** Strict 10MB payload and response size limits preventing Out-Of-Memory (OOM) poison pills.
+12. **🧪 Automated CI/CD Compliance Runner (`verify` Command):**  
+    Run `audienceshift verify` in GitHub Actions or locally to audit whether your webhook handlers properly enforce cryptographic signature validation, reject forged headers, block expired replay timestamps, and handle duplicate deliveries idempotently.
+13. **🎲 Universal Webhook Preset Catalog & Chaos Simulator:**  
     Send realistic simulated webhook payloads from 9+ major platforms without live third-party developer accounts, plus custom user-defined presets via `.audienceshift.yaml` and the `--duplicate` flag to stress-test idempotency.
 
 ---
@@ -102,14 +110,20 @@ docker compose up -d
 ### 3. Connect Local Client (on your Development Machine)
 
 ```bash
-# Expose local port 3000 through your VPS tunnel
+# Expose local port 3000 through your VPS tunnel (auto-creates .audienceshift.db for history)
 audienceshift listen 3000 --server wss://tunnel.yourdomain.com/tunnel/connect
+
+# Collaborative Multi-Client Fanout: Join the same tunnel as your teammates
+audienceshift listen 3000 --server wss://tunnel.yourdomain.com/tunnel/connect --id team-shared
 
 # Launch with embedded Web Studio on localhost:4040
 audienceshift listen 8000 --server wss://tunnel.yourdomain.com/tunnel/connect --web
 
-# Run headless daemon mode in background or CI
-audienceshift listen 8080 --server wss://tunnel.yourdomain.com/tunnel/connect --headless
+# Ephemeral in-memory mode for CI/CD runs (no disk file created)
+audienceshift listen 8080 --server wss://tunnel.yourdomain.com/tunnel/connect --memory-only --headless
+
+# Custom database file location
+audienceshift listen 8080 --db /path/to/events.db
 ```
 
 ### 4. Run Offline Mock Webhook Receiver (No VPS / No Internet Required)
@@ -206,10 +220,14 @@ audienceshift listen
 | :--- | :--- |
 | `↑` / `k` | Move cursor up in webhook event list |
 | `↓` / `j` | Move cursor down in webhook event list |
+| `Tab` | **Toggle Views:** Switch between `[Request]` and `[Response]` inspection panels |
+| `g` | **Synthesize Types:** Toggle 1-Click Go Struct AST & TypeScript interface view |
+| `x` | **DLQ Filter:** Toggle Dead Letter Queue view (failed webhooks only) |
+| `PgUp` / `PgDn` | Scroll up and down inside payload, response, or type view |
+| `/` | **Interactive Filter:** Real-time search by method, path, or provider |
 | `Space` | Pause / Resume live incoming webhook stream |
 | `r` | **Instant Replay:** Re-fire selected webhook to local backend (auto recalculates HMAC & Stripe timestamp) |
 | `y` | **Copy as cURL:** Export full cURL command to system clipboard via ANSI OSC 52 |
-| `m` | Trigger interactive mutation prompt |
 | `c` | Clear captured event history |
 | `q` / `Ctrl+C` | Quit AudienceShift |
 
@@ -219,6 +237,11 @@ audienceshift listen
 
 When passing `--web` (or setting `web: true` in `.audienceshift.yaml`), AudienceShift starts a zero-npm web interface:
 
+- **Type Synthesizer:** Real-time generation of Go Structs, TypeScript interfaces, and runtime Zod schemas with 1-click clipboard copy.
+- **Dead Letter Queue (DLQ):** Filter failed webhooks and trigger rate-limited bulk replays via "⚡ Resend DLQ".
+- **Custom Webhook Composer:** Scratchpad to build, sign, and dispatch custom webhooks from scratch.
+- **Session Export:** Download captured webhooks in 1 click as JSON or Postman Collection v2.1 (or via CLI `--export events.json`).
+- **Response Diffing:** Visual side-by-side comparison between original and replayed responses.
 - **Automatic Port Fallback:** If port `:4040` is occupied (e.g. by Ngrok), it scans `:4041`..`:4060` automatically.
 - **Real-Time Stream:** Server-Sent Events (SSE) stream webhooks into the browser with 15-second keepalive heartbeats.
 - **Sensitive Data Masking:** One-click `[👁️ Reveal]` toggle to safely view masked tokens.
@@ -246,15 +269,17 @@ AudienceShift is engineered according to the **Rugged Software Constitution**:
 
 All core packages follow **Testability-First** design with complete I/O isolation:
 
-- `cmd/audienceshift`: CLI commands (`server`, `listen`, `mock`, `trigger`, `version`).
+- `cmd/audienceshift`: CLI commands (`server`, `listen`, `mock`, `trigger`, `verify`, `version`).
+- `internal/features/storage`: Pure-Go embedded BoltDB storage (`BoltStore`) with index timeline and Dead Letter Queue (DLQ).
+- `internal/features/synthesizer`: Pure-Go type schema inference engine for Go struct AST, TypeScript interfaces, and Zod schemas.
 - `internal/features/inspector`: Bounded circular buffer (`MemoryStore`), thread-safe Pub/Sub (`EventBus`), HMAC signature verification/generation, and sensitive header masking.
-- `internal/features/tunnel`: Gorilla WebSocket to `net.Conn` adapter with `hashicorp/yamux` multiplexed reverse tunnels.
-- `internal/features/replay`: Pure mutation logic, timestamp refresh, and HTTP replay dispatch.
+- `internal/features/tunnel`: Multiplexed reverse tunnels with collaborative multi-client fanout support over `hashicorp/yamux`.
+- `internal/features/replay`: Mutation logic, DLQ bulk rate-limited resend engine, and HTTP replay dispatch.
 - `internal/features/tui`: Terminal dashboard built with Charm `bubbletea` & `lipgloss`.
 - `internal/features/catalog`: Universal webhook presets for Stripe, Midtrans, GitHub, Slack, Shopify, Xendit, GitLab, Discord, and Twilio.
 - `internal/features/config`: Hierarchical YAML configuration loader with flag precedence.
 - `internal/features/web`: Embedded Web Studio SPA compiled via Go `embed.FS`.
-- `test/e2e`: Comprehensive integration test suite verifying end-to-end webhook ingress, yamux streaming, offline mock receiver, and replay loops.
+- `test/e2e`: Comprehensive integration test suite verifying end-to-end webhook ingress, yamux streaming, multi-client fanout, persistent BoltStore, and replay loops.
 
 Run full test suite:
 ```bash

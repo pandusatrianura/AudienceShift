@@ -56,12 +56,65 @@ function initSSE() {
   };
 }
 
+let filterMode = 'all';
+
+function setFilterMode(mode) {
+  filterMode = mode;
+  const btnAll = document.getElementById('filter-all');
+  const btnDLQ = document.getElementById('filter-dlq');
+  const btnResend = document.getElementById('btn-resend-dlq');
+
+  if (mode === 'all') {
+    if (btnAll) { btnAll.className = 'btn'; }
+    if (btnDLQ) { btnDLQ.className = 'btn btn-secondary'; }
+    if (btnResend) { btnResend.style.display = 'none'; }
+  } else {
+    if (btnAll) { btnAll.className = 'btn btn-secondary'; }
+    if (btnDLQ) { btnDLQ.className = 'btn'; }
+    if (btnResend) { btnResend.style.display = 'inline-block'; }
+  }
+  renderEventList();
+}
+
+async function resendDLQ() {
+  const btn = document.getElementById('btn-resend-dlq');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Resending...';
+  }
+  try {
+    const res = await fetch('/api/dlq/resend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 50, interval_ms: 50 })
+    });
+    const data = await res.json();
+    alert(`DLQ Resend Complete: ${data.total_processed} processed, ${data.success_count} succeeded, ${data.failed_count} failed.`);
+    await initEvents();
+  } catch (err) {
+    alert('DLQ Resend Error: ' + err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '⚡ Resend DLQ';
+    }
+  }
+}
+
 function renderEventList() {
   const listEl = document.getElementById('event-list');
   const searchVal = document.getElementById('search-input').value.toLowerCase();
   listEl.innerHTML = '';
 
+  const dlqCountEl = document.getElementById('dlq-count');
+  const totalDLQ = events.filter(e => e.response.status_code >= 400 || (e.response.error && e.response.error.length > 0)).length;
+  if (dlqCountEl) dlqCountEl.textContent = totalDLQ;
+
   const filtered = events.filter(e => {
+    if (filterMode === 'dlq') {
+      const isFailed = e.response.status_code >= 400 || (e.response.error && e.response.error.length > 0);
+      if (!isFailed) return false;
+    }
     return e.request.path.toLowerCase().includes(searchVal) ||
            e.provider.toLowerCase().includes(searchVal) ||
            e.request.method.toLowerCase().includes(searchVal);
@@ -199,11 +252,74 @@ function renderActiveTab() {
         <div id="replay-diff-box" style="margin-top: 14px;"></div>
       </div>
     `;
+  } else if (currentTab === 'types') {
+    renderTypesTab(content);
   } else if (currentTab === 'composer') {
     renderComposerTab(content);
   } else if (currentTab === 'catalog') {
     renderCatalogTab(content);
   }
+}
+
+let currentTypes = null;
+let currentTypeLanguage = 'go';
+
+async function renderTypesTab(container) {
+  if (!selectedEvent) return;
+  container.innerHTML = '<div style="padding: 20px; color: var(--text-muted);">Inferring schema and synthesizing types...</div>';
+
+  try {
+    const res = await fetch(`/api/events/types?id=${selectedEvent.id}`);
+    if (!res.ok) {
+      const errText = await res.text();
+      container.innerHTML = `<div style="padding: 20px; color: var(--color-danger);">Failed to synthesize types: ${escapeHtml(errText)}</div>`;
+      return;
+    }
+    currentTypes = await res.json();
+    renderTypesView(container);
+  } catch (err) {
+    container.innerHTML = `<div style="padding: 20px; color: var(--color-danger);">Error: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderTypesView(container) {
+  if (!currentTypes) return;
+  const activeCode = currentTypeLanguage === 'go' ? currentTypes.go :
+                     currentTypeLanguage === 'ts' ? currentTypes.typescript : currentTypes.zod;
+
+  container.innerHTML = `
+    <div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div style="display: flex; gap: 8px;">
+          <button class="btn ${currentTypeLanguage === 'go' ? '' : 'btn-secondary'}" onclick="setTypeLanguage('go')" style="padding: 4px 10px; font-size: 0.8rem;">Go Struct</button>
+          <button class="btn ${currentTypeLanguage === 'ts' ? '' : 'btn-secondary'}" onclick="setTypeLanguage('ts')" style="padding: 4px 10px; font-size: 0.8rem;">TypeScript</button>
+          <button class="btn ${currentTypeLanguage === 'zod' ? '' : 'btn-secondary'}" onclick="setTypeLanguage('zod')" style="padding: 4px 10px; font-size: 0.8rem;">Zod Schema</button>
+        </div>
+        <button id="btn-copy-type" class="btn btn-secondary" onclick="copyCurrentType()" style="padding: 4px 12px; font-size: 0.8rem;">📋 Copy ${currentTypeLanguage.toUpperCase()}</button>
+      </div>
+      <pre class="code-block">${escapeHtml(activeCode)}</pre>
+    </div>
+  `;
+}
+
+function setTypeLanguage(lang) {
+  currentTypeLanguage = lang;
+  const container = document.getElementById('tab-content');
+  if (container) renderTypesView(container);
+}
+
+function copyCurrentType() {
+  if (!currentTypes) return;
+  const activeCode = currentTypeLanguage === 'go' ? currentTypes.go :
+                     currentTypeLanguage === 'ts' ? currentTypes.typescript : currentTypes.zod;
+  navigator.clipboard.writeText(activeCode).then(() => {
+    const btn = document.getElementById('btn-copy-type');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = '✅ Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    }
+  });
 }
 
 function renderComposerTab(container) {

@@ -15,8 +15,10 @@ type EventStore interface {
 	Save(event *WebhookEvent) error
 	GetByID(id string) (*WebhookEvent, error)
 	List(limit int) ([]*WebhookEvent, error)
+	ListFailed(limit int) ([]*WebhookEvent, error)
 	Clear() error
 	Count() int
+	Close() error
 }
 
 // MemoryStore provides a thread-safe circular in-memory buffer with bounded capacity.
@@ -103,6 +105,24 @@ func (s *MemoryStore) List(limit int) ([]*WebhookEvent, error) {
 	return result, nil
 }
 
+// ListFailed returns up to limit failed events (HTTP 4xx/5xx or transport errors) in descending order.
+func (s *MemoryStore) ListFailed(limit int) ([]*WebhookEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []*WebhookEvent
+	total := len(s.events)
+	for i := total - 1; i >= 0; i-- {
+		if s.events[i].IsFailed() {
+			result = append(result, s.events[i].Clone())
+			if limit > 0 && len(result) >= limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
 // Clear flushes all stored events from memory.
 func (s *MemoryStore) Clear() error {
 	s.mu.Lock()
@@ -118,4 +138,9 @@ func (s *MemoryStore) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.events)
+}
+
+// Close releases any resources held by the store (no-op for MemoryStore).
+func (s *MemoryStore) Close() error {
+	return nil
 }

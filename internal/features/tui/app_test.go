@@ -254,3 +254,66 @@ func TestTUIScrolling(t *testing.T) {
 		t.Errorf("expected view to remain valid after scrolling")
 	}
 }
+
+func TestTUITypeSynthesizerAndDLQ(t *testing.T) {
+	bus := inspector.NewEventBus()
+	defer bus.Close()
+	ch, unsub := bus.Subscribe(5)
+	defer unsub()
+
+	model := tui.NewModel("test-tunnel", "https://test.tunnel.com", "http://localhost:8080", ch, nil)
+
+	// Add success event with short path
+	evt1 := inspector.NewWebhookEvent("test-tunnel", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/ok",
+		Body:   []byte(`{"order_id": "ORD-123", "amount": 100}`),
+	})
+	evt1.Response = inspector.HTTPResponse{StatusCode: 200}
+	updated, _ := model.Update(evt1)
+	model = updated.(tui.Model)
+
+	// Add failed event with short path
+	evt2 := inspector.NewWebhookEvent("test-tunnel", inspector.HTTPRequest{
+		Method: "POST",
+		Path:   "/fail",
+		Body:   []byte(`{"error": "payment_failed"}`),
+	})
+	evt2.Response = inspector.HTTPResponse{StatusCode: 500, Error: "server error"}
+	updated, _ = model.Update(evt2)
+	model = updated.(tui.Model)
+
+	// 1. Test 'g' key to switch to Synthesized Types view
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	model = updated.(tui.Model)
+	viewTypes := model.View()
+	if !strings.Contains(viewTypes, "GO STRUCTS") || !strings.Contains(viewTypes, "type GenericPayload struct") {
+		t.Errorf("expected synthesized types in TUI view, got:\n%s", viewTypes)
+	}
+
+	// Press 'g' again to toggle back to Request
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	model = updated.(tui.Model)
+	if !strings.Contains(model.View(), "Headers:") {
+		t.Errorf("expected 'g' toggle back to Request view")
+	}
+
+	// 2. Test 'x' key to toggle DLQ filter
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	model = updated.(tui.Model)
+	dlqView := model.View()
+	if !strings.Contains(dlqView, "/fail") {
+		t.Errorf("expected DLQ view to contain /fail webhook")
+	}
+	if strings.Contains(dlqView, "/ok") {
+		t.Errorf("expected DLQ view to hide /ok webhook")
+	}
+
+	// Toggle DLQ off
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	model = updated.(tui.Model)
+	allView := model.View()
+	if !strings.Contains(allView, "/ok") {
+		t.Errorf("expected turning off DLQ filter to reveal /ok webhook")
+	}
+}
