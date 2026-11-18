@@ -36,3 +36,26 @@ artifacts/superpowers/
 .github/workflows/*
 !.github/workflows/ci.yml
 !.github/workflows/release.yml
+
+# AI Assistants & Agent Configurations
+.agents/
+.agentwork/
+.augment/
+.claude/
+.codebuddy/
+.codewhale/
+.codex/
+.continue/
+.cursor/
+.factory/
+.gemini/
+.impeccable/
+.kilocode/
+.kiro/
+.opencode/
+.qoder/
+.roo/
+.schemas/
+.trae/
+.warp/
+.windsurf/
