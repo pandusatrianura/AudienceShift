@@ -93,16 +93,81 @@ go build -o bin/audienceshift ./cmd/audienceshift
 
 ### 2. Run Public Server (on your VPS)
 
-#### Option A: Standalone Binary with Automatic Let's Encrypt TLS (ACME)
+#### Option A: Systemd Service on Ubuntu / Debian VPS (Production-Ready)
+
+**1. Build & Install Linux Binary:**
 ```bash
-audienceshift server \
-  --addr :443 \
-  --domain tunnel.yourdomain.com \
-  --acme \
-  --acme-email admin@yourdomain.com
+GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /usr/local/bin/audienceshift ./cmd/audienceshift
 ```
 
-#### Option B: Docker Compose (1-Command VPS Setup)
+**2. Create Systemd Service Unit (`/etc/systemd/system/audienceshift.service`):**
+```ini
+[Unit]
+Description=AudienceShift Tunnel Relay Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+LimitNOFILE=65535
+ExecStart=/usr/local/bin/audienceshift server \
+    -addr :443 \
+    -domain tunnel.yourdomain.com \
+    -token "YOUR_STRONG_SECRET_TOKEN" \
+    -acme \
+    -acme-email "admin@yourdomain.com" \
+    -acme-cache "/var/lib/audienceshift/certs"
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**3. Enable and Start Service:**
+```bash
+mkdir -p /var/lib/audienceshift/certs
+systemctl daemon-reload
+systemctl enable --now audienceshift
+```
+
+#### Option B: Docker Compose (1-Command Containerized Setup)
+
+Run the relay server with automated Let's Encrypt TLS and health probes using `docker-compose.yml`:
+
+```yaml
+version: '3.8'
+
+services:
+  audienceshift-relay:
+    image: golang:1.24-alpine
+    container_name: audienceshift-relay
+    restart: always
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - certs_data:/app/certs
+    ports:
+      - "80:80"     # Required for ACME HTTP-01 challenge & redirect
+      - "443:443"   # HTTPS Ingress & WebSocket Tunnel
+    command: >
+      go run ./cmd/audienceshift server
+      -addr :443
+      -domain tunnel.yourdomain.com
+      -token "${TUNNEL_AUTH_TOKEN}"
+      -acme
+      -acme-email "${ACME_EMAIL}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  certs_data:
+```
+
+Launch with:
 ```bash
 docker compose up -d
 ```

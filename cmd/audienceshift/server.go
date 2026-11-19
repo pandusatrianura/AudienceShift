@@ -68,9 +68,17 @@ func runServer(args []string) {
 		// Stand up HTTP-01 challenge responder & HTTP->HTTPS redirect on port 80
 		go func() {
 			log.Println("Starting HTTP-to-HTTPS redirect & ACME HTTP-01 responder on :80...")
+			fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/healthz" || r.URL.Path == "/status" {
+					tunnelServer.ServeHTTP(w, r)
+					return
+				}
+				target := "https://" + r.Host + r.URL.RequestURI()
+				http.Redirect(w, r, target, http.StatusMovedPermanently)
+			})
 			httpServer := &http.Server{
 				Addr:    ":80",
-				Handler: certManager.HTTPHandler(nil),
+				Handler: certManager.HTTPHandler(fallback),
 			}
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("ACME HTTP listener error: %v", err)

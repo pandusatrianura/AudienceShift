@@ -20,6 +20,11 @@ services:
       --acme
       --acme-email ${ACME_EMAIL:-admin@example.com}
       --acme-cache /certs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
 volumes:
   certs-data:
